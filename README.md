@@ -44,8 +44,22 @@ too.
 
 ## Current status
 
-* DUMMER uses no heuristic shortcuts: so it's "as sensitive as
-  possible", but slow and memory-consuming.
+* Direct DUMMER searches use thorough dynamic programming, including
+  provisional one- and two-nucleotide frameshift transitions.  They can
+  therefore be slow and memory-consuming.
+
+* The current build can apply a forward-only pre-filter before final scoring,
+  so searches are not entirely heuristic-free.  The final alignment still
+  integrates evidence from alternative alignment paths.
+
+* Standalone direct DUMMER invocation is not well tested at present.  For
+  current genomic searches, using `bin/pipeline2.py` is preferred, including
+  when running in `--max` mode.
+
+* For large genomic searches, `bin/pipeline2.py` provides an optional
+  filtering pipeline.  It translates nucleotide sequences in all six reading
+  frames, uses MMseqs2 to find candidate regions, extracts merged genomic
+  windows, and then runs DUMMER on those windows.
 
 * It can fail due to overflow (numbers getting too big).  This only
   happens when there are very strong similarities.
@@ -53,12 +67,45 @@ too.
 * The *E*-values are over-estimated when the profile or sequence is
   short.
 
+The filtering pipeline is intended to reduce the amount of sequence passed
+to DUMMER, not to replace the final DUMMER alignment.  Its sensitivity and
+runtime depend on the MMseqs2 settings and on the quality of the translated
+candidate hits.
+
+The provisional background frameshift rates are documented in
+[`docs/frameshift-rate-approximation.md`](docs/frameshift-rate-approximation.md).
+They are rough per-base estimates and are not yet calibrated HMM transition
+probabilities.
+
 ## Setup
 
-You can get the highest version number from
-https://gitlab.com/mcfrith/seq-position-probs/-/tags (or `git clone`
-it).  Using the command line, go into the downloaded directory and do
-`make`.  That puts the programs in a `bin` subdirectory.
+Clone the repository and initialize its submodules:
+
+    git clone https://github.com/3liteking148/seq-position-probs.git
+    cd seq-position-probs
+    git submodule update --init --recursive
+
+Build the C++ programs with CMake:
+
+    cmake -B build -DCMAKE_BUILD_TYPE=Release
+    cmake --build build --parallel
+
+The build copies `dummer`, `dummerl`, and `dummer-build` into `bin/`.
+For the command examples below, add that directory to your `PATH`:
+
+    export PATH="$PWD/bin:$PATH"
+
+The direct DUMMER programs require a C++20 compiler and CMake.  The genomic
+filtering pipeline additionally requires:
+
+* Python 3 with the `pybedtools` package.
+* `seqkit` for six-frame translation.
+* `bedtools` for extracting genomic windows.
+* MMseqs2 with GPU support.
+
+Some NVIDIA GPU architectures may require a bug-fixed fork of MMseqs2.  See
+the [MMseqs2 fork](TODO) if the standard build fails or behaves incorrectly
+on the target GPU.
 
 ## Usage
 
@@ -103,6 +150,59 @@ repeats, like atatatatatatatat.  Such sequences evolve frequently and
 independently, resulting in similarities between unrelated sequences.
 So, DUMMER ignores similarity at these positions.
 
+## Genomic filtering pipeline
+
+`bin/pipeline2.py` is intended for searching nucleotide genomes with protein
+or translated-family profiles.  It accepts an HMM profile, an MSA used to
+construct the MMseqs2 query profile, a nucleotide FASTA file, and a CPU count:
+
+    python3 bin/pipeline2.py profile.hmm profile.msa genome.fa 8 --dummer-bin bin/dummer
+
+The pipeline performs these steps:
+
+1. Translate the nucleotide FASTA in all six reading frames with `seqkit`.
+2. Build MMseqs2 target and query databases.
+3. Search the translated target database with MMseqs2.
+4. Map protein hits back to strand-aware genomic coordinates.
+5. Merge and extract candidate windows with `bedtools`.
+6. Run DUMMER on the extracted windows.
+
+The CPU argument controls the MMseqs2 and translation stages.  The pipeline's
+current DUMMER invocation uses its own configured thread setting, so use
+`dummer --help` and the source defaults when tuning execution on a particular
+machine.
+
+Use `--max` to disable the MMseqs2 filtering path and run DUMMER against the
+complete set of raw contigs and both strands.  In this mode the pipeline does
+not run `seqkit` or MMseqs2; it creates forward and reverse-complement FASTA
+entries and passes them directly to DUMMER.  This is useful as a
+maximum-sensitivity comparison, but can require substantially more time and
+memory:
+
+    python3 bin/pipeline2.py profile.hmm profile.msa genome.fa 8 --max --dummer-bin bin/dummer
+
+Other supported pipeline options include:
+
+* `--skip-dummer`: generate the extracted debug FASTA without running DUMMER.
+* `--output-fa FILE`: retain a copy of the extracted debug FASTA.
+* `--target-db-pad PATH`: reuse an existing padded MMseqs2 target database.
+* `--query-db PATH`: reuse an existing MMseqs2 query profile database.
+* `--dummer-bin PATH`: select the DUMMER executable explicitly.
+* `--prefilter-mode 3`: use MMseqs2's GPU combined ungapped and gapped
+  prefilter mode.
+
+### Example
+
+The repository's `test.sh` provides a small intended-use example:
+
+    time python3 bin/pipeline2.py MET-test.hmm MET.msa MET-target.fa 1 --max
+
+It searches the included test target with the `MET-test.hmm` profile in
+maximum-sensitivity mode.  It does not exercise the MMseqs2 filtering path;
+remove `--max` to use the normal candidate-filtering workflow.  If the DUMMER
+binary is not at the pipeline's default build location, add
+`--dummer-bin bin/dummer`.
+
 ## Fast, low-memory version
 
 `dummerl` uses half as much memory, and is faster, but is more
@@ -143,40 +243,6 @@ For proteins, `U` (selenocysteine) is treated the same as `C`
 
 `dummer` treats other unusual symbols as barriers that break the
 sequence into contigs (contiguous sequence).
-
-## Low-cut/high-pass filtering (experimental)
-
-Sometimes, a profile has a region with generally high probability of
-(for example) letter "A".  Such regions may spuriously match A-rich
-parts of a sequence.
-
-Option `-d` suppresses slowly-varying (low frequency) components of
-the position-specific letter probabilities.  For example, `-d8`
-smooths the signal by a Gaussian distribution with a standard
-deviation of 8 positions, then subtracts the smoothed signal from the
-original signal.
-
-Option `-D` is the same, except it keeps the non-varying (zero
-frequency) component.  So, if the whole profile is (for example)
-A-rich, this tendency is kept.  This doesn't cause spurious
-similarities, because DUMMER uses matching "background" letter
-probabilities.
-
-These options also turn off simple-sequence detection in the profile.
-
-This approach doesn't avoid spurious similarities of tandem repeats
-like acgtacgtacgtacgtacgt.
-
-**Details**
-
-If the probability of letter y at position i is P(i,y), the filter is
-applied (separately for each y) to:
-
-    log[P(i,y)]  -  AVG(over z){ log[P(i,z)] }
-
-The profile is treated as circular (wrapping around at the edges),
-which is rarely appropriate, but ensures no change in the smoothed
-signal's average value.
 
 ## Rarely useful features
 
