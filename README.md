@@ -1,81 +1,10 @@
-# DUMMER
+# DUMMEST
 
-DUMMER (Dumb Uncomplicated Match ModelER) aims to find distant
-relationships between genetic sequences (nucleotide or protein).  It's
-similar to [HMMER][], but much simpler, and aspires to be better.
+DUMMEST (DUMMER without Explicit Sequence Translation) 
+it finds similar regions between DNA sequences and
+profile HMMs allowing for frameshifts.  
 
-In more detail, it finds similar regions between sequences and
-"profiles".  A profile is a set of position-specific letter, deletion,
-and insertion probabilities: typically made from a family of related
-sequences.
 
-This is a proof-of-principle for the paper [Simple and thorough
-detection of related sequences with position-varying probabilities of
-substitutions, insertions, and deletions][frith2025].
-
-## Motivation: HMMER &rarr; DUMMER
-
-Good features of HMMER (also in DUMMER):
-
-* It uses position-varying probabilities of not only letters, but also
-  starting and extending insertions and deletions.
-
-* It integrates evidence from alternative ways of aligning two
-  regions.
-
-In other words, it uses simple probabilities as thoroughly as
-possible, to find subtly related regions sensitively.
-
-But, if this is the best way, why isn't it just the (standard) way,
-used by all sequence search tools?
-
-[HMMER's theory][] has excessive complexity and minor biases, it's
-optimized to answer a question that doesn't seem the most useful, and
-its *E*-value conjectures seem not entirely right ([Frith
-2025][frith2025]).  HMMER is optimized to judge whether a whole
-sequence contains a match: it would rather find two matches in two
-short sequences than three matches in one long sequence.
-
-DUMMER is optimized to find matches: it doesn't care whether they lie
-in long/short same/different sequences.  It's vastly simpler
-(comparable to widely-used classic alignment): the hope is to help
-thorough probability calculation become "the way" used by other tools
-too.
-
-## Current status
-
-* Direct DUMMER searches use thorough dynamic programming, including
-  provisional one- and two-nucleotide frameshift transitions.  They can
-  therefore be slow and memory-consuming.
-
-* The current build can apply a forward-only pre-filter before final scoring,
-  so searches are not entirely heuristic-free.  The final alignment still
-  integrates evidence from alternative alignment paths.
-
-* Standalone direct DUMMER invocation is not well tested at present.  For
-  current genomic searches, using `bin/pipeline2.py` is preferred, including
-  when running in `--max` mode.
-
-* For large genomic searches, `bin/pipeline2.py` provides an optional
-  filtering pipeline.  It translates nucleotide sequences in all six reading
-  frames, uses MMseqs2 to find candidate regions, extracts merged genomic
-  windows, and then runs DUMMER on those windows.
-
-* It can fail due to overflow (numbers getting too big).  This only
-  happens when there are very strong similarities.
-
-* The *E*-values are over-estimated when the profile or sequence is
-  short.
-
-The filtering pipeline is intended to reduce the amount of sequence passed
-to DUMMER, not to replace the final DUMMER alignment.  Its sensitivity and
-runtime depend on the MMseqs2 settings and on the quality of the translated
-candidate hits.
-
-The provisional background frameshift rates are documented in
-[`docs/frameshift-rate-approximation.md`](docs/frameshift-rate-approximation.md).
-They are rough per-base estimates and are not yet calibrated HMM transition
-probabilities.
 
 ## Setup
 
@@ -343,6 +272,43 @@ You can omit this step:
   position exceeds an "effective sequence number (EFFN)" threshold,
   those counts are downscaled so their total equals the threshold.
   Insertion and deletion counts are treated similarly.
+
+  
+## Current status
+
+* Direct DUMMER searches use thorough dynamic programming, including
+  provisional one- and two-nucleotide frameshift transitions.  They can
+  therefore be slow and memory-consuming.
+
+* The current build can apply a forward-only pre-filter before final scoring,
+  so searches are not entirely heuristic-free.  The final alignment still
+  integrates evidence from alternative alignment paths.
+
+* Standalone direct DUMMER invocation is not well tested at present.  For
+  current genomic searches, using `bin/pipeline2.py` is preferred, including
+  when running in `--max` mode.
+
+* For large genomic searches, `bin/pipeline2.py` provides an optional
+  filtering pipeline.  It translates nucleotide sequences in all six reading
+  frames, uses MMseqs2 to find candidate regions, extracts merged genomic
+  windows, and then runs DUMMER on those windows.
+
+* It can fail due to overflow (numbers getting too big).  This only
+  happens when there are very strong similarities.
+
+* The *E*-values are over-estimated when the profile or sequence is
+  short.
+
+The filtering pipeline is intended to reduce the amount of sequence passed
+to DUMMER, not to replace the final DUMMER alignment.  Its sensitivity and
+runtime depend on the MMseqs2 settings and on the quality of the translated
+candidate hits.
+
+The provisional background frameshift rates are documented in
+[`docs/frameshift-rate-approximation.md`](docs/frameshift-rate-approximation.md).
+They are rough per-base estimates and are not yet calibrated HMM transition
+probabilities.
+
 
 [Dfam]: https://dfam.org/home
 [Pfam]: https://www.ebi.ac.uk/interpro/entry/pfam/#table
