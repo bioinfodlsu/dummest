@@ -119,6 +119,7 @@ Other supported pipeline options include:
 * `--dummer-bin PATH`: select the DUMMER executable explicitly.
 * `--prefilter-mode 3`: use MMseqs2's GPU combined ungapped and gapped
   prefilter mode.
+* `--no-gpu`: run MMseqs2 on CPU only (passes `--gpu 0` to `createdb` and `search`); it cannot be combined with `--prefilter-mode 3`.
 
 ### Example
 
