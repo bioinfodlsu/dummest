@@ -731,6 +731,8 @@ struct DPScratch {
     std::array<std::vector<int>, simdWidth> fwd_band_lo, fwd_band_hi;
     std::array<std::vector<int>, simdWidth> rev_band_lo, rev_band_hi;
 
+    // Reusable seed-gate row buffer (avoids per-row allocation)
+    std::vector<simd_t> seed_gate_buf;
     // Current DP column count (= max sequence length in batch)
     int active_dp_width = 0;
 };
@@ -1018,7 +1020,7 @@ static void logBandStats(const char* label, int i, int activeCount,
 
 struct SeedGateResult {
     bool has_seeds;
-    std::vector<simd_t> gate;
+    const simd_t *gate; // points into scratch.seed_gate_buf when has_seeds
 };
 
 static SeedGateResult buildSeedGatedNullGate(
@@ -1026,11 +1028,13 @@ static SeedGateResult buildSeedGatedNullGate(
     const std::array<std::vector<std::vector<int>>, simdWidth>& seed_j,
     DPScratch& scratch,
     const std::array<std::vector<uint8_t>*, simdWidth>& decoded) {
-    SeedGateResult result{false, {}};
+    SeedGateResult result{false, nullptr};
     for (int k = 0; k < activeCount && !result.has_seeds; k++)
         result.has_seeds = !seed_j[k][row].empty();
     if (result.has_seeds) {
-        result.gate.assign(dp_width + 4, simd_t(0));
+        scratch.seed_gate_buf.assign(dp_width + 4, simd_t(0));
+        simd_t* gate = scratch.seed_gate_buf.data();
+        result.gate = gate;
         for (int k = 0; k < activeCount; k++) {
             const auto& seeds = seed_j[k][row];
             if (seeds.empty()) continue;
@@ -1045,7 +1049,7 @@ static SeedGateResult buildSeedGatedNullGate(
                 int lo = std::max(lane_lo, sj_phys - seed_margin);
                 int hi = std::min(lane_hi, sj_phys + seed_margin);
                 for (int gj = lo; gj <= hi; gj++)
-                    result.gate[gj] = Kokkos::max(result.gate[gj], lane_one);
+                    gate[gj] = Kokkos::max(gate[gj], lane_one);
             }
         }
     }
@@ -1344,7 +1348,7 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
 
             auto [row_has_seeds, null_gate] = seed_gating
                 ? buildSeedGatedNullGate(-1, i, activeCount, scratch.active_dp_width, args.seed_margin, *args.seed_j, scratch, decoded)
-                : SeedGateResult{false, {}};
+                : SeedGateResult{false, nullptr};
 
             bool use_rev_band = seed_gating || (args.in_lo != nullptr) || useXDrop;
             int rev_lo, rev_hi;
@@ -1631,7 +1635,7 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
 
         auto [fwd_row_has_seeds, fwd_null_gate] = seed_gating
             ? buildSeedGatedNullGate(0, i, activeCount, scratch.active_dp_width, args.seed_margin, *args.seed_j, scratch, decoded)
-            : SeedGateResult{false, {}};
+            : SeedGateResult{false, nullptr};
 
         bool use_fwd_band = seed_gating || (args.in_lo != nullptr) || useXDrop;
         int lo, hi;
@@ -1934,7 +1938,8 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
 
         if (minProbRatio[idx] >= 0) {
             if (best_overall >= minProbRatio[idx]) {
-                std::cerr << "has" << std::endl;
+                if (verbosity > 0)
+                    std::cerr << "has" << std::endl;
                 std::ranges::sort(scratch.opt_profile_position[idx], std::greater<>());
                 auto &aligned = scratch.aligned;
                 aligned[idx].assign(decoded[idx]->size() + 0, false);
@@ -2338,10 +2343,12 @@ void findFinalSimilaritiesBatched(std::vector<FinalSimilarity> &similarities,
                             double evalue = p.gumbel_k_forward_only * totSequenceLength / probRatio;
                             double pvalue = 1.0 - exp(-evalue);
 
-                            std::ostringstream s;
-                            s << "# DBG " << p.name << " log: " << log_probRatio << " p: " << pvalue << std::endl;
+                            if (verbosity > 0) {
+                                std::ostringstream s;
+                                s << "# DBG " << p.name << " log: " << log_probRatio << " p: " << pvalue << std::endl;
 
-                            std::cout << s.str();
+                                std::cout << s.str();
+                            }
 
                             if (pvalue <= forward_only_evalue) {
                                 forward_only_job_results[jobIdx].push_back(requests[job.startRequestIdx + k]);
@@ -3031,37 +3038,49 @@ void estimateK(Profile &profile, const Float *letterFreqs, char *sequence, int s
 
     double s = scale;
 
-    if (printVerbosity > 1) {
-        std::cout << "#\tend-\tstart-\tmid-anchored\n";
+    auto printEntryStats = [&](const CacheEntry &e) {
+        if (printVerbosity > 1) {
+            std::cout << "#\tend-\tstart-\tmid-anchored\n";
 
-        std::cout << "#lamMM\t" << entry.MMendL << "\t" << entry.MMbegL << "\t" << entry.MMmidL << "\n"
+            std::cout << "#lamMM\t" << e.MMendL << "\t" << e.MMbegL << "\t" << e.MMmidL << "\n"
 
-                  << "#kMM\t" << entry.MMendK / pow(s, entry.MMendL) << "\t" << entry.MMbegK / pow(s, entry.MMbegL) << "\t"
-                  << entry.MMmidK / pow(s, entry.MMmidL) << "\n"
+                      << "#kMM\t" << e.MMendK / pow(s, e.MMendL) << "\t" << e.MMbegK / pow(s, e.MMbegL) << "\t"
+                      << e.MMmidK / pow(s, e.MMmidL) << "\n"
 
-                  << "#kMM1\t" << entry.MMendKsimple / scale << "\t" << entry.MMbegKsimple / scale << "\t"
-                  << entry.MMmidKsimple / scale << "\n";
+                      << "#kMM1\t" << e.MMendKsimple / scale << "\t" << e.MMbegKsimple / scale << "\t"
+                      << e.MMmidKsimple / scale << "\n";
 
-        std::cout << "#lamML\t" << entry.MLendL << "\t" << entry.MLbegL << "\t" << entry.MLmidL << "\n"
+            std::cout << "#lamML\t" << e.MLendL << "\t" << e.MLbegL << "\t" << e.MLmidL << "\n"
 
-                  << "#kML\t" << entry.MLendK / pow(s, entry.MLendL) << "\t" << entry.MLbegK / pow(s, entry.MLbegL) << "\t"
-                  << entry.MLmidK / pow(s, entry.MLmidL) << "\n"
+                      << "#kML\t" << e.MLendK / pow(s, e.MLendL) << "\t" << e.MLbegK / pow(s, e.MLbegL) << "\t"
+                      << e.MLmidK / pow(s, e.MLmidL) << "\n"
 
-                  << "#kML1\t" << entry.MLendKsimple / scale << "\t" << entry.MLbegKsimple / scale << "\t"
-                  << entry.MLmidKsimple / scale << "\n";
+                      << "#kML1\t" << e.MLendKsimple / scale << "\t" << e.MLbegKsimple / scale << "\t"
+                      << e.MLmidKsimple / scale << "\n";
 
-        std::cout << "#lamLM\t" << entry.LMendL << "\t" << entry.LMbegL << "\t" << entry.LMmidL << "\n"
+            std::cout << "#lamLM\t" << e.LMendL << "\t" << e.LMbegL << "\t" << e.LMmidL << "\n"
 
-                  << "#kLM\t" << entry.LMendK / pow(s, entry.LMendL) << "\t" << entry.LMbegK / pow(s, entry.LMbegL) << "\t"
-                  << entry.LMmidK / pow(s, entry.LMmidL) << "\n";
-    } else if (printVerbosity > 0) {
-        std::cout << "# K: " << entry.MMendKsimple / scale << " " << entry.MMbegKsimple / scale << " "
-                  << entry.MMmidKsimple / scale << "\n";
-    } else {
-        std::cout << "# K: " << entry.MMmidKsimple / scale << "\n";
+                      << "#kLM\t" << e.LMendK / pow(s, e.LMendL) << "\t" << e.LMbegK / pow(s, e.LMbegL) << "\t"
+                      << e.LMmidK / pow(s, e.LMmidL) << "\n";
+        } else if (printVerbosity > 0) {
+            std::cout << "# K: " << e.MMendKsimple / scale << " " << e.MMbegKsimple / scale << " "
+                      << e.MMmidKsimple / scale << "\n";
+        } else {
+            std::cout << "# K: " << e.MMmidKsimple / scale << "\n";
+        }
+
+        std::cout << "# Lambda: " << e.MMmidL << "\n";
+    };
+
+    printEntryStats(entry);
+#ifdef FORWARD_ONLY_FILTER
+    {
+        CacheEntry fwd = entry;
+        fwd.MMendL = fwd.MMbegL = fwd.MMmidL = entry.fmm_mid_l;
+        fwd.MMendK = fwd.MMbegK = fwd.MMmidK = entry.fmm_mid_k;
+        printEntryStats(fwd);
     }
-
-    std::cout << "# Lambda: " << entry.MMmidL << "\n";
+#endif
 }
 
 int intFromText(const char *text) {
