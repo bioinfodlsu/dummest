@@ -107,7 +107,7 @@ def main():
         if not args.skip_dummer:
             try:
                 subprocess.run(
-                    [dummer_exec, hmm_file, merged_fa_path, '-T 8', '-W 0.1', '-N', str(tot_seq_len)],
+                    [dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-W', '0.1', '-N', str(tot_seq_len)],
                     env=os.environ.copy(), check=True,
                 )
             except subprocess.CalledProcessError as e:
@@ -373,7 +373,7 @@ def main():
             #custom_env["ASAN_OPTIONS"] = "detect_container_overflow=1:strict_memcmp=1"
             
             try:
-                subprocess.run([dummer_exec, hmm_file, merged_fa_path, '-T 8', '-W 0.001' if not args.max else '-W 10', '-N', str(tot_seq_len)], env=custom_env, check=True)
+                subprocess.run([dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-W', '0.001' if not args.max else '10', '-N', str(tot_seq_len)], env=custom_env, check=True)
             except subprocess.CalledProcessError as e:
                 print(f"Error: dummer encountered an issue (Exit status: {e.returncode})")
                 sys.exit(1)
