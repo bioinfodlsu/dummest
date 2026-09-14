@@ -1052,9 +1052,23 @@ static SeedGateResult buildSeedGatedNullGate(
     return result;
 }
 
+// Per-batch setup shared between the seed-gating pass and the band pass.
+// Transposed decode + null-model log probs are expensive, so compute them
+// once per batch (pass 1) and reuse in pass 2 on the identical batch.
+struct BatchSetup {
+    bool valid = false;
+    int activeCount = 0;
+    int dp_width = 0;
+    simd_t actual_seq_len = simd_t(0.0);
+    simd_t null_emit_raw = simd_t(0.0);
+    simd_t null_prob_per_pos = simd_t(0.0);
+};
+
 void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &similarities, const Profile &profile,
              const std::array<std::vector<uint8_t>*, simdWidth> &decoded, std::array<Float, simdWidth> minProbRatio,
-             DPScratch &scratch, int activeCount, bool useXDrop, const DPArgs& args = DPArgs{}) {
+             DPScratch &scratch, int activeCount, bool useXDrop, const DPArgs& args = DPArgs{},
+             BatchSetup *outSetup = nullptr,
+             const BatchSetup *inSetup = nullptr) {
     assert(0 < activeCount && activeCount <= simdWidth);
 
     const bool capture_bands = (args.out_lo != nullptr);
@@ -1072,16 +1086,36 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
     int alphabetSize = profile.width - nonLetterWidth;
     int zero_idx = alphabetSize + 4; // new padded index that maps to 0.0
 
-    uint8_t* transposed_base = buildTransposedDecoded(scratch, scratch.active_dp_width, activeCount, zero_idx, decoded);
+    simd_t actual_seq_len;
+    simd_t null_prob_per_pos;
+    simd_t null_emit_1, null_emit_2, null_emit_3;
+    uint8_t* transposed_base;
+    auto &null_probs_prefix = scratch.null_probs_prefix;
+    auto &null_probs_suffix = scratch.null_probs_suffix;
+
+    bool reuseCtx = inSetup && inSetup->valid &&
+                    inSetup->activeCount == activeCount &&
+                    inSetup->dp_width == maxSequenceLength;
+    if (reuseCtx) {
+        actual_seq_len = inSetup->actual_seq_len;
+        null_prob_per_pos = inSetup->null_prob_per_pos;
+        transposed_base = scratch.transposed_decoded.data() + 4 * simdWidth;
+
+        null_emit_1 = inSetup->null_emit_raw;
+        null_emit_2 = null_emit_1 * null_emit_1;
+        null_emit_3 = null_emit_2 * null_emit_1;
+
+        null_emit_2 *= (Float)(0.25 * 0.25);
+        null_emit_1 *= (Float)0.25;
+    } else {
+    transposed_base = buildTransposedDecoded(scratch, scratch.active_dp_width, activeCount, zero_idx, decoded);
 
     alignas(64) Float actual_sequence_length[simdWidth] = {};
     for (int idx = 0; idx < activeCount; idx++) {
         actual_sequence_length[idx] = (Float)decoded[idx]->size();
     }
-    simd_t actual_seq_len = Kokkos::Experimental::simd_unchecked_load<simd_t>(actual_sequence_length);
+    actual_seq_len = Kokkos::Experimental::simd_unchecked_load<simd_t>(actual_sequence_length);
 
-    auto &null_probs_prefix = scratch.null_probs_prefix;
-    auto &null_probs_suffix = scratch.null_probs_suffix;
     null_probs_prefix.resize(scratch.active_dp_width + 4); null_probs_suffix.resize(scratch.active_dp_width + 4);
 
     null_probs_suffix[scratch.active_dp_width] = 0;
@@ -1172,16 +1206,27 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
         null_emit_tmp[idx] = null_emit_raw;
     }
 
-    auto null_emit_1 = Kokkos::Experimental::simd_unchecked_load<simd_t>(null_emit_tmp);
-    auto null_emit_2 = null_emit_1 * null_emit_1;
-    auto null_emit_3 = null_emit_2 * null_emit_1;
+    auto null_emit_raw_vec = Kokkos::Experimental::simd_unchecked_load<simd_t>(null_emit_tmp);
+    null_emit_1 = null_emit_raw_vec;
+    null_emit_2 = null_emit_1 * null_emit_1;
+    null_emit_3 = null_emit_2 * null_emit_1;
 
     null_emit_2 *= (Float)(0.25 * 0.25);
     null_emit_1 *= (Float)0.25;
 
     auto null_seq_log_prob_simd = Kokkos::Experimental::simd_unchecked_load<simd_t>(null_seq_log_prob);
     simd_t inv_actual_seq_len = (Float)1.0 / actual_seq_len;
-    simd_t null_prob_per_pos = null_seq_log_prob_simd * inv_actual_seq_len;
+    null_prob_per_pos = null_seq_log_prob_simd * inv_actual_seq_len;
+
+    if (outSetup) {
+        outSetup->valid = true;
+        outSetup->activeCount = activeCount;
+        outSetup->dp_width = maxSequenceLength;
+        outSetup->actual_seq_len = actual_seq_len;
+        outSetup->null_emit_raw = null_emit_raw_vec;
+        outSetup->null_prob_per_pos = null_prob_per_pos;
+    }
+    } // end setup (reuse vs compute)
 
     scratch.W0_curr.resize(scratch.active_dp_width + 4, simd_t(0.0));
     scratch.W0_next.resize(scratch.active_dp_width + 4, simd_t(0.0));
@@ -2186,13 +2231,16 @@ void findFinalSimilarities(std::vector<FinalSimilarity> &similarities, std::arra
             lane_hi[k].resize(profile.length + 2);
         }
 
-        // Pass 1: seed-gated band discovery
+        // Pass 1: seed-gated band discovery (builds shared batch setup)
+        BatchSetup setup;
         findSimilarities(sims, profile, decoded, minProbRatio, scratch, activeCount, true,
-            DPArgs{.seed_j = &seed_j, .out_lo = &lane_lo, .out_hi = &lane_hi});
+            DPArgs{.seed_j = &seed_j, .out_lo = &lane_lo, .out_hi = &lane_hi},
+            &setup, nullptr);
 
-        // Pass 2: gated DP within discovered bands
+        // Pass 2: gated DP within discovered bands (reuses pass-1 setup)
         findSimilarities(sims, profile, decoded, minProbRatio, scratch, activeCount, false,
-            DPArgs{.in_lo = &lane_lo, .in_hi = &lane_hi});
+            DPArgs{.in_lo = &lane_lo, .in_hi = &lane_hi},
+            nullptr, &setup);
     } else {
         std::array<std::vector<int>, simdWidth> lane_lo, lane_hi;
         for (int k = 0; k < activeCount; k++) {
