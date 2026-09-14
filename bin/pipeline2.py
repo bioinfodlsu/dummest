@@ -35,8 +35,14 @@ def main():
     parser.add_argument("--prefilter-mode", type=int, default=None, choices=[3],
                         help="MMseqs2 --prefilter-mode 3 (GPU combined ungapped+gapped). "
                              "Seeds use only endpoint positions (point seeds).")
+    parser.add_argument("--no-gpu", action="store_true",
+                        help="Run MMseqs2 on CPU only (passes --gpu 0 to createdb and search instead of --gpu 1). "
+                             "Cannot be combined with --prefilter-mode 3, which requires GPU.")
 
     args = parser.parse_args()
+
+    if args.no_gpu and args.prefilter_mode == 3:
+        parser.error("--prefilter-mode 3 requires GPU; remove --no-gpu or drop --prefilter-mode 3")
 
     hmm_file = args.hmm_file
     msa_file = args.msa_file
@@ -147,7 +153,10 @@ def main():
             ], check=True)
 
             target_db_pad = os.path.join(db_dir, "targetDB_pad")
-            subprocess.run(["mmseqs", "createdb", prot_fa_path, target_db_pad, "--gpu", "1"], check=True, stdout=subprocess.DEVNULL)
+            gpu_flag = "0" if args.no_gpu else "1"
+            if args.no_gpu:
+                print("# Running MMseqs2 in CPU-only mode (--gpu 0)")
+            subprocess.run(["mmseqs", "createdb", prot_fa_path, target_db_pad, "--gpu", gpu_flag], check=True, stdout=subprocess.DEVNULL)
 
         if args.query_db:
             query_db = args.query_db
@@ -160,7 +169,7 @@ def main():
 
         mmseqs_cmd = [
             "mmseqs", "search", query_db, target_db_pad, ali_file, tmpdir,
-            "--gpu", "1",
+            "--gpu", "0" if args.no_gpu else "1",
             "--threads", cpus,
             #"-e", "10000",
             "-e", str(len(dna_seqs) * 6 * 0.01), # p-value 0.01

@@ -1,81 +1,10 @@
-# DUMMER
+# DUMMEST
 
-DUMMER (Dumb Uncomplicated Match ModelER) aims to find distant
-relationships between genetic sequences (nucleotide or protein).  It's
-similar to [HMMER][], but much simpler, and aspires to be better.
+DUMMEST (DUMMER without Explicit Sequence Translation) 
+it finds similar regions between DNA sequences and
+profile HMMs allowing for frameshifts.  
 
-In more detail, it finds similar regions between sequences and
-"profiles".  A profile is a set of position-specific letter, deletion,
-and insertion probabilities: typically made from a family of related
-sequences.
 
-This is a proof-of-principle for the paper [Simple and thorough
-detection of related sequences with position-varying probabilities of
-substitutions, insertions, and deletions][frith2025].
-
-## Motivation: HMMER &rarr; DUMMER
-
-Good features of HMMER (also in DUMMER):
-
-* It uses position-varying probabilities of not only letters, but also
-  starting and extending insertions and deletions.
-
-* It integrates evidence from alternative ways of aligning two
-  regions.
-
-In other words, it uses simple probabilities as thoroughly as
-possible, to find subtly related regions sensitively.
-
-But, if this is the best way, why isn't it just the (standard) way,
-used by all sequence search tools?
-
-[HMMER's theory][] has excessive complexity and minor biases, it's
-optimized to answer a question that doesn't seem the most useful, and
-its *E*-value conjectures seem not entirely right ([Frith
-2025][frith2025]).  HMMER is optimized to judge whether a whole
-sequence contains a match: it would rather find two matches in two
-short sequences than three matches in one long sequence.
-
-DUMMER is optimized to find matches: it doesn't care whether they lie
-in long/short same/different sequences.  It's vastly simpler
-(comparable to widely-used classic alignment): the hope is to help
-thorough probability calculation become "the way" used by other tools
-too.
-
-## Current status
-
-* Direct DUMMER searches use thorough dynamic programming, including
-  provisional one- and two-nucleotide frameshift transitions.  They can
-  therefore be slow and memory-consuming.
-
-* The current build can apply a forward-only pre-filter before final scoring,
-  so searches are not entirely heuristic-free.  The final alignment still
-  integrates evidence from alternative alignment paths.
-
-* Standalone direct DUMMER invocation is not well tested at present.  For
-  current genomic searches, using `bin/pipeline2.py` is preferred, including
-  when running in `--max` mode.
-
-* For large genomic searches, `bin/pipeline2.py` provides an optional
-  filtering pipeline.  It translates nucleotide sequences in all six reading
-  frames, uses MMseqs2 to find candidate regions, extracts merged genomic
-  windows, and then runs DUMMER on those windows.
-
-* It can fail due to overflow (numbers getting too big).  This only
-  happens when there are very strong similarities.
-
-* The *E*-values are over-estimated when the profile or sequence is
-  short.
-
-The filtering pipeline is intended to reduce the amount of sequence passed
-to DUMMER, not to replace the final DUMMER alignment.  Its sensitivity and
-runtime depend on the MMseqs2 settings and on the quality of the translated
-candidate hits.
-
-The provisional background frameshift rates are documented in
-[`docs/frameshift-rate-approximation.md`](docs/frameshift-rate-approximation.md).
-They are rough per-base estimates and are not yet calibrated HMM transition
-probabilities.
 
 ## Setup
 
@@ -95,7 +24,7 @@ For the command examples below, add that directory to your `PATH`:
 
     export PATH="$PWD/bin:$PATH"
 
-The direct DUMMER programs require a C++20 compiler and CMake.  The genomic
+The direct DUMMEST programs require a C++20 compiler and CMake.  The genomic
 filtering pipeline additionally requires:
 
 * Python 3 with the `pybedtools` package.
@@ -109,7 +38,7 @@ on the target GPU.
 
 ## Usage
 
-DUMMER can compare sequences in FASTA format to profiles in HMMER3/f
+DUMMEST can compare sequences in FASTA format to profiles in HMMER3/f
 format.  You can make profiles with `dummer-build` (new and
 lightly-tested).  Or you can (ab)use [HMMER][] profiles (whose
 definition doesn't quite fit): you can get DNA profiles from [Dfam][],
@@ -138,7 +67,7 @@ possible alignments passing through the anchor:
 
 score = log<sub>2</sub>[ (sum of alignment probabilities) / (probability of length-0 alignment) ]
 
-DUMMER tries all possible anchors, and outputs all whose *E*-values
+DUMMEST tries all possible anchors, and outputs all whose *E*-values
 are &le; a threshold and are local optima.
 
 The `s` lines show a representative alignment.  This aligns letters
@@ -148,7 +77,7 @@ alignments with that anchor.
 Lowercase indicates positions judged (by [tantan][]) to be simple
 repeats, like atatatatatatatat.  Such sequences evolve frequently and
 independently, resulting in similarities between unrelated sequences.
-So, DUMMER ignores similarity at these positions.
+So, DUMMEST ignores similarity at these positions.
 
 ## Genomic filtering pipeline
 
@@ -165,17 +94,17 @@ The pipeline performs these steps:
 3. Search the translated target database with MMseqs2.
 4. Map protein hits back to strand-aware genomic coordinates.
 5. Merge and extract candidate windows with `bedtools`.
-6. Run DUMMER on the extracted windows.
+6. Run DUMMEST on the extracted windows.
 
 The CPU argument controls the MMseqs2 and translation stages.  The pipeline's
-current DUMMER invocation uses its own configured thread setting, so use
+current DUMMEST invocation uses its own configured thread setting, so use
 `dummer --help` and the source defaults when tuning execution on a particular
 machine.
 
-Use `--max` to disable the MMseqs2 filtering path and run DUMMER against the
+Use `--max` to disable the MMseqs2 filtering path and run DUMMEST against the
 complete set of raw contigs and both strands.  In this mode the pipeline does
 not run `seqkit` or MMseqs2; it creates forward and reverse-complement FASTA
-entries and passes them directly to DUMMER.  This is useful as a
+entries and passes them directly to DUMMEST.  This is useful as a
 maximum-sensitivity comparison, but can require substantially more time and
 memory:
 
@@ -183,13 +112,14 @@ memory:
 
 Other supported pipeline options include:
 
-* `--skip-dummer`: generate the extracted debug FASTA without running DUMMER.
+* `--skip-dummer`: generate the extracted debug FASTA without running DUMMEST.
 * `--output-fa FILE`: retain a copy of the extracted debug FASTA.
 * `--target-db-pad PATH`: reuse an existing padded MMseqs2 target database.
 * `--query-db PATH`: reuse an existing MMseqs2 query profile database.
-* `--dummer-bin PATH`: select the DUMMER executable explicitly.
+* `--dummer-bin PATH`: select the DUMMEST executable explicitly.
 * `--prefilter-mode 3`: use MMseqs2's GPU combined ungapped and gapped
   prefilter mode.
+* `--no-gpu`: run MMseqs2 on CPU only (passes `--gpu 0` to `createdb` and `search`); it cannot be combined with `--prefilter-mode 3`.
 
 ### Example
 
@@ -199,7 +129,7 @@ The repository's `test.sh` provides a small intended-use example:
 
 It searches the included test target with the `MET-test.hmm` profile in
 maximum-sensitivity mode.  It does not exercise the MMseqs2 filtering path;
-remove `--max` to use the normal candidate-filtering workflow.  If the DUMMER
+remove `--max` to use the normal candidate-filtering workflow.  If the DUMMEST
 binary is not at the pipeline's default build location, add
 `--dummer-bin bin/dummer`.
 
@@ -251,12 +181,12 @@ sequence into contigs (contiguous sequence).
 `-e0` has a special meaning: for each profile versus each contig strand, it
 shows the maximum end-anchored, start-anchored, and mid-anchored
 scores (in that order).  These scores sum over all alignments ending
-at, starting at, or passing through the anchor.  DUMMER gets each kind
+at, starting at, or passing through the anchor.  DUMMEST gets each kind
 of score for all possible anchors, and shows the maximum.
 
 ### Random sequences
 
-To calculate *E*-values, DUMMER needs to estimate a *K* parameter for
+To calculate *E*-values, DUMMEST needs to estimate a *K* parameter for
 each profile.  To do that, it compares the profile to random
 sequences.  To see details of this, give it a profile file only:
 
@@ -343,6 +273,43 @@ You can omit this step:
   position exceeds an "effective sequence number (EFFN)" threshold,
   those counts are downscaled so their total equals the threshold.
   Insertion and deletion counts are treated similarly.
+
+  
+## Current status
+
+* Direct DUMMEST searches use thorough dynamic programming, including
+  provisional one- and two-nucleotide frameshift transitions.  They can
+  therefore be slow and memory-consuming.
+
+* The current build can apply a forward-only pre-filter before final scoring,
+  so searches are not entirely heuristic-free.  The final alignment still
+  integrates evidence from alternative alignment paths.
+
+* Standalone direct DUMMEST invocation is not well tested at present.  For
+  current genomic searches, using `bin/pipeline2.py` is preferred, including
+  when running in `--max` mode.
+
+* For large genomic searches, `bin/pipeline2.py` provides an optional
+  filtering pipeline.  It translates nucleotide sequences in all six reading
+  frames, uses MMseqs2 to find candidate regions, extracts merged genomic
+  windows, and then runs DUMMEST on those windows.
+
+* It can fail due to overflow (numbers getting too big).  This only
+  happens when there are very strong similarities.
+
+* The *E*-values are over-estimated when the profile or sequence is
+  short.
+
+The filtering pipeline is intended to reduce the amount of sequence passed
+to DUMMEST, not to replace the final DUMMEST alignment.  Its sensitivity and
+runtime depend on the MMseqs2 settings and on the quality of the translated
+candidate hits.
+
+The provisional background frameshift rates are documented in
+[`docs/frameshift-rate-approximation.md`](docs/frameshift-rate-approximation.md).
+They are rough per-base estimates and are not yet calibrated HMM transition
+probabilities.
+
 
 [Dfam]: https://dfam.org/home
 [Pfam]: https://www.ebi.ac.uk/interpro/entry/pfam/#table
