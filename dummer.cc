@@ -2273,6 +2273,12 @@ void findFinalSimilarities(std::vector<FinalSimilarity> &similarities, std::arra
         const char *sequence = req[idx].seqData->sequence.c_str();
         const char *maskedSequence = req[idx].seqData->maskedSequence.c_str();
         for (const auto &x : sims[idx]) {
+            if (x.alignment.empty()) {
+                continue;  // anchor passed the score threshold but traceback
+                           // emitted no segments (boundary leak, footprint-edge
+                           // remnant, weak-ridge anchor); a zero-column block
+                           // is not a valid MAF record
+            }
             int anchor2 = contigToSequencePos(req[idx].seqData->contig, req[idx].seqData->strandNum, x.anchor2);
             FinalSimilarity s = {x.probRatio, profileNum, req[idx].seqData->strandNum, x.anchor1,
                                  anchor2,     x.anchor1,  anchor2};
