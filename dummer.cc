@@ -1067,7 +1067,7 @@ struct BatchSetup {
 void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &similarities, const Profile &profile,
              const std::array<std::vector<uint8_t>*, simdWidth> &decoded, std::array<Float, simdWidth> minProbRatio,
              DPScratch &scratch, int activeCount, bool useXDrop, const DPArgs& args = DPArgs{},
-             BatchSetup *outSetup = nullptr,
+             simd_t *bwdBestOut = nullptr, BatchSetup *outSetup = nullptr,
              const BatchSetup *inSetup = nullptr) {
     assert(0 < activeCount && activeCount <= simdWidth);
 
@@ -1512,6 +1512,20 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
         simd_t exponent = -null_prob_per_pos * (Float)(j + 1) + null_probs_prefix[j];
 
         null_model_prefix[j] = Kokkos::exp2(exponent);
+    }
+
+    if (bwdBestOut && !capture_bands) {
+        // Backward-accumulator best reproduces findSimilaritiesBackwardOnly's
+        // global best without a second DP: W1 holds raw backward values here.
+        simd_t best_mid = simd_t(0.0);
+        const simd_t *__restrict__ np = null_model_prefix.data();
+        for (int i = profile.length; i >= 0; i--) {
+            const simd_t *__restrict__ rp = scratch.W1.row_ptr(i);
+            for (int j = 0; j < scratch.active_dp_width; j++) {
+                best_mid = Kokkos::max(best_mid, rp[j] * np[j]);
+            }
+        }
+        *bwdBestOut = best_mid;
     }
 
 #ifdef ALIGN
@@ -2235,12 +2249,12 @@ void findFinalSimilarities(std::vector<FinalSimilarity> &similarities, std::arra
         BatchSetup setup;
         findSimilarities(sims, profile, decoded, minProbRatio, scratch, activeCount, true,
             DPArgs{.seed_j = &seed_j, .out_lo = &lane_lo, .out_hi = &lane_hi},
-            &setup, nullptr);
+            nullptr, &setup, nullptr);
 
         // Pass 2: gated DP within discovered bands (reuses pass-1 setup)
         findSimilarities(sims, profile, decoded, minProbRatio, scratch, activeCount, false,
             DPArgs{.in_lo = &lane_lo, .in_hi = &lane_hi},
-            nullptr, &setup);
+            nullptr, nullptr, &setup);
     } else {
         std::array<std::vector<int>, simdWidth> lane_lo, lane_hi;
         for (int k = 0; k < activeCount; k++) {
@@ -2626,10 +2640,16 @@ public:
     }
 
     std::string computeCacheKey(const Profile &profile, const Float *letterFreqs,
-                                    int sequenceLength, int border, int numOfSequences,
-                                    bool use_forward_only = false) {
+                                    int sequenceLength, int border, int numOfSequences) {
+        // DUMMER_CACHE_IGNORE_BINARY_HASH=1 keeps calibration results valid
+        // across rebuilds (at the risk of stale entries if FP behavior changes).
+        static const bool ignoreBinaryHash = [] {
+            const char *e = getenv("DUMMER_CACHE_IGNORE_BINARY_HASH");
+            return e && *e && strcmp(e, "0") != 0;
+        }();
         Hash128 h;
-        h.add(binaryHash);
+        if (!ignoreBinaryHash)
+            h.add(binaryHash);
         h.add(profile.name);
         h.add(profile.width);
         h.add(profile.length);
@@ -2647,9 +2667,6 @@ public:
         h.add(STOP_CODON_PROB);
         h.add(BG_STOP_CODON_PROB);
         h.add(TANTAN_MASK_THRESHOLD);
-#ifdef FORWARD_ONLY_FILTER
-        h.add(use_forward_only);
-#endif
 
         return h.to_string();
     }
@@ -2714,12 +2731,11 @@ private:
 
 public:
     bool lookup(const Profile &profile, const Float *letterFreqs, int sequenceLength,
-                int border, int numOfSequences, CacheEntry &outEntry,
-                bool use_forward_only = false) {
+                int border, int numOfSequences, CacheEntry &outEntry) {
         std::scoped_lock lock(cacheMutex);
         load();
 
-        std::string key = computeCacheKey(profile, letterFreqs, sequenceLength, border, numOfSequences, use_forward_only);
+        std::string key = computeCacheKey(profile, letterFreqs, sequenceLength, border, numOfSequences);
         if (auto it = entries.find(key); it != entries.end()) {
             outEntry = it->second;
             return true;
@@ -2728,12 +2744,11 @@ public:
     }
 
     void store(const Profile &profile, const Float *letterFreqs, int sequenceLength,
-               int border, int numOfSequences, const CacheEntry &entry,
-               bool use_forward_only = false) {
+               int border, int numOfSequences, const CacheEntry &entry) {
         std::scoped_lock lock(cacheMutex);
         load();
 
-        std::string key = computeCacheKey(profile, letterFreqs, sequenceLength, border, numOfSequences, use_forward_only);
+        std::string key = computeCacheKey(profile, letterFreqs, sequenceLength, border, numOfSequences);
         entries[key] = entry;
     }
 
@@ -2759,26 +2774,24 @@ public:
 
 void estimateK(Profile &profile, const Float *letterFreqs, char *sequence, int sequenceLength,
                int border, int numOfSequences, int printVerbosity, ThreadPool &threadPool, std::vector<DPScratch> &threadScratches,
-               bool use_forward_only = false, std::ofstream* scoresFile = nullptr) {
+               std::ofstream* scoresFile = nullptr) {
+    // One DP pass yields both the forward-backward (end/beg/mid) scores and
+    // the forward-only scores (backward accumulator), stored in one entry.
     CacheEntry entry;
     if (scoresFile == nullptr &&
-        cache.lookup(profile, letterFreqs, sequenceLength, border, numOfSequences, entry, use_forward_only)) {
+        cache.lookup(profile, letterFreqs, sequenceLength, border, numOfSequences, entry)) {
         if (printVerbosity > 1) {
             std::cout << "# Warning: using cached results\n";
         }
 
+        profile.gumbelKendAnchored = entry.MMendK;
+        profile.gumbelKbegAnchored = entry.MMbegK;
+        profile.gumbelKmidAnchored = entry.MMmidK;
+        profile.lambda = entry.MMmidL;
 #ifdef FORWARD_ONLY_FILTER
-        if (use_forward_only) {
-            profile.gumbel_k_forward_only = entry.fmm_mid_k;
-            profile.lambda_forward_only = entry.fmm_mid_l;
-        } else
+        profile.gumbel_k_forward_only = entry.fmm_mid_k;
+        profile.lambda_forward_only = entry.fmm_mid_l;
 #endif
-        {
-            profile.gumbelKendAnchored = entry.MMendK;
-            profile.gumbelKbegAnchored = entry.MMbegK;
-            profile.gumbelKmidAnchored = entry.MMmidK;
-            profile.lambda = entry.MMmidL;
-        }
     } else {
         int alphabetSize = profile.width - nonLetterWidth;
 
@@ -2803,6 +2816,9 @@ void estimateK(Profile &profile, const Float *letterFreqs, char *sequence, int s
         double *endScores = scores.data();
         double *begScores = endScores + numOfSequences;
         double *midScores = begScores + numOfSequences;
+#ifdef FORWARD_ONLY_FILTER
+        std::vector<double> fwdOnlyScores(numOfSequences);
+#endif
 
         if (printVerbosity > 1) {
             std::cout << "#trial\tend-anchored\t\tstart-anchored\t\tmid-anchored\n\
@@ -2901,22 +2917,6 @@ void estimateK(Profile &profile, const Float *letterFreqs, char *sequence, int s
                     decoded[lane] = decodeSequence(seqBuf, sequenceLength + border, alphabet, charToNumber);
                 }
 
-#ifdef FORWARD_ONLY_FILTER
-                if (use_forward_only) {
-                    std::array<std::vector<uint8_t>*, simdWidth> intDecodedPtrs = {};
-                    for (int k = 0; k < activeCount; k++)
-                        intDecodedPtrs[k] = &decoded[k];
-                    std::array<Float, simdWidth> bestScores;
-                    findSimilaritiesBackwardOnly(bestScores, profile, intDecodedPtrs, threadScratch, activeCount);
-                    for (int lane = 0; lane < activeCount; ++lane) {
-                        int trialIdx = start + lane;
-                        double score = log((double)bestScores[lane]);
-                        endScores[trialIdx] = score;
-                        begScores[trialIdx] = score;
-                        midScores[trialIdx] = score;
-                    }
-                } else
-#endif
                 {
                     std::array<std::vector<uint8_t>*, simdWidth> decodedPtrs = {};
                     for (int k = 0; k < activeCount; ++k)
@@ -2924,7 +2924,11 @@ void estimateK(Profile &profile, const Float *letterFreqs, char *sequence, int s
                     std::array<Float, simdWidth> minProbRatio;
                     minProbRatio.fill(-2.0f);
                     std::array<std::vector<AlignedSimilarity>, simdWidth> simsSIMD;
-                    findSimilarities(simsSIMD, profile, decodedPtrs, minProbRatio, threadScratch, activeCount, false);
+                    simd_t bwdBest = simd_t(0.0);
+                    findSimilarities(simsSIMD, profile, decodedPtrs, minProbRatio, threadScratch, activeCount, false,
+                                     DPArgs{}, &bwdBest, nullptr, nullptr);
+                    alignas(64) Float bwdBestArr[simdWidth];
+                    simd_unchecked_store(bwdBest, bwdBestArr, Kokkos::Experimental::simd_flag_default);
 
                     for (int lane = 0; lane < activeCount; ++lane) {
                         int trialIdx = start + lane;
@@ -2932,6 +2936,9 @@ void estimateK(Profile &profile, const Float *letterFreqs, char *sequence, int s
                         endScores[trialIdx] = log(sims[0].probRatio);
                         begScores[trialIdx] = log(sims[1].probRatio);
                         midScores[trialIdx] = log(sims[2].probRatio);
+#ifdef FORWARD_ONLY_FILTER
+                        fwdOnlyScores[trialIdx] = log((double)bwdBestArr[lane]);
+#endif
 
                         if (printVerbosity > 1) {
                             std::lock_guard<std::mutex> lock(g_cout_mutex);
@@ -2957,19 +2964,17 @@ void estimateK(Profile &profile, const Float *letterFreqs, char *sequence, int s
         }
 
         if (scoresFile && scoresFile->is_open()) {
-            const char* mode = use_forward_only ? "forward-only" : "forward-backward";
             for (int trial = 0; trial < numOfSequences; ++trial) {
-                if (use_forward_only) {
-                    (*scoresFile) << mode << "\t" << profile.name << "\t" << trial + 1 << "\tall\t"
-                                  << endScores[trial] + shift << "\n";
-                } else {
-                    (*scoresFile) << mode << "\t" << profile.name << "\t" << trial + 1 << "\tend\t"
-                                  << endScores[trial] + shift << "\n";
-                    (*scoresFile) << mode << "\t" << profile.name << "\t" << trial + 1 << "\tstart\t"
-                                  << begScores[trial] + shift << "\n";
-                    (*scoresFile) << mode << "\t" << profile.name << "\t" << trial + 1 << "\tmid\t"
-                                  << midScores[trial] + shift << "\n";
-                }
+                (*scoresFile) << "forward-backward" << "\t" << profile.name << "\t" << trial + 1 << "\tend\t"
+                              << endScores[trial] + shift << "\n";
+                (*scoresFile) << "forward-backward" << "\t" << profile.name << "\t" << trial + 1 << "\tstart\t"
+                              << begScores[trial] + shift << "\n";
+                (*scoresFile) << "forward-backward" << "\t" << profile.name << "\t" << trial + 1 << "\tmid\t"
+                              << midScores[trial] + shift << "\n";
+#ifdef FORWARD_ONLY_FILTER
+                (*scoresFile) << "forward-only" << "\t" << profile.name << "\t" << trial + 1 << "\tall\t"
+                              << fwdOnlyScores[trial] + shift << "\n";
+#endif
             }
         }
 
@@ -2988,25 +2993,25 @@ void estimateK(Profile &profile, const Float *letterFreqs, char *sequence, int s
     estimateGumbel(MMmidL, MMmidK, MMmidKsimple, MLmidL, MLmidK, MLmidKsimple, LMmidL, LMmidK,
                    midScores, numOfSequences, sequenceLength);
 
-    if (use_forward_only) {
-        double mn = *std::min_element(midScores, midScores + numOfSequences);
-        double mx = *std::max_element(midScores, midScores + numOfSequences);
-        double mean_s = 0; for (int z = 0; z < numOfSequences; z++) mean_s += midScores[z]; mean_s /= numOfSequences;
-        std::cout << "# DBG forward-only scores: min=" << mn << " max=" << mx << " mean=" << mean_s << " range=" << (mx-mn) << "\n";
-    }
-
 #ifdef FORWARD_ONLY_FILTER
-        if (use_forward_only) {
-            profile.gumbel_k_forward_only = MMmidK;
-            profile.lambda_forward_only = MMmidL;
-        } else
+    double fMMmidL, fMMmidK, fMMmidKsimple, fMLmidL, fMLmidK, fMLmidKsimple;
+    double fLMmidL, fLMmidK;
+    estimateGumbel(fMMmidL, fMMmidK, fMMmidKsimple, fMLmidL, fMLmidK, fMLmidKsimple, fLMmidL, fLMmidK,
+                   fwdOnlyScores.data(), numOfSequences, sequenceLength);
+    {
+        double mn = *std::min_element(fwdOnlyScores.begin(), fwdOnlyScores.end());
+        double mx = *std::max_element(fwdOnlyScores.begin(), fwdOnlyScores.end());
+        double mean_s = 0; for (int z = 0; z < numOfSequences; z++) mean_s += fwdOnlyScores[z]; mean_s /= numOfSequences;
+        if (verbosity > 0)
+            std::cout << "# DBG forward-only scores: min=" << mn << " max=" << mx << " mean=" << mean_s << " range=" << (mx-mn) << "\n";
+    }
+    profile.gumbel_k_forward_only = fMMmidK;
+    profile.lambda_forward_only = fMMmidL;
 #endif
-        {
-            profile.gumbelKendAnchored = MMendK;
-            profile.gumbelKbegAnchored = MMbegK;
-            profile.gumbelKmidAnchored = MMmidK;
-            profile.lambda = MMmidL;
-        }
+        profile.gumbelKendAnchored = MMendK;
+        profile.gumbelKbegAnchored = MMbegK;
+        profile.gumbelKmidAnchored = MMmidK;
+        profile.lambda = MMmidL;
 
         entry = {
             MMendL, MMbegL, MMmidL,
@@ -3018,10 +3023,10 @@ void estimateK(Profile &profile, const Float *letterFreqs, char *sequence, int s
             LMendL, LMbegL, LMmidL,
             LMendK, LMbegK, LMmidK
 #ifdef FORWARD_ONLY_FILTER
-            , MMmidL, MMmidK
+            , fMMmidL, fMMmidK
 #endif
         };
-        cache.store(profile, letterFreqs, sequenceLength, border, numOfSequences, entry, use_forward_only);
+        cache.store(profile, letterFreqs, sequenceLength, border, numOfSequences, entry);
     }
 
     double s = scale;
@@ -3469,7 +3474,10 @@ Options for random sequences:\n\
 Options for background letter probabilities:\n\
   --barithmetic     arithmetic mean of position-specific probabilities\n\
   --bgeometric      geometric mean of position-specific probabilities (default)\n\
-  --bmedian         median of position-specific probabilities\n"
+  --bmedian         median of position-specific probabilities\n\
+\n\
+Environment:\n\
+  DUMMER_CACHE_IGNORE_BINARY_HASH=1  reuse the E-value calibration cache across rebuilds\n"
 #ifdef FORWARD_ONLY_FILTER
 "\n\
 Int Forward-only pre-filter options:\n\
@@ -3693,10 +3701,8 @@ Int Forward-only pre-filter options:\n\
         setCharToNumber(charToNumber, getAlphabet(p.width - nonLetterWidth));
 
 #ifdef EVALUE
-        estimateK(p, bgProbs, &charVec[seqIdx], randomSeqLen, border, randomSeqNum, printVerbosity, threadPool, threadScratches, false, scoresFilename ? &scoresFile : nullptr);
-#ifdef FORWARD_ONLY_FILTER
-        estimateK(p, bgProbs, &charVec[seqIdx], randomSeqLen, border, randomSeqNum, printVerbosity, threadPool, threadScratches, true, scoresFilename ? &scoresFile : nullptr);
-#endif
+        // one pass calibrates both the forward-backward and forward-only models
+        estimateK(p, bgProbs, &charVec[seqIdx], randomSeqLen, border, randomSeqNum, printVerbosity, threadPool, threadScratches, scoresFilename ? &scoresFile : nullptr);
 #endif
     }
 
