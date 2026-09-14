@@ -691,6 +691,8 @@ public:
     simd_t get(size_t i, int j) const { return rows_[i][j]; }
     void set(size_t i, int j, simd_t v) { rows_[i][j] = v; }
     Float get_lane(size_t i, int j, int k) const { return rows_[i][j][k]; }
+    simd_t *row_ptr(size_t i) { return rows_[i].data(); }
+    const simd_t *row_ptr(size_t i) const { return rows_[i].data(); }
 
     int cols() const { return logical_cols_; }
     size_t rows() const { return rows_.size(); }
@@ -722,14 +724,13 @@ struct DPScratch {
     std::array<std::vector<int>, simdWidth> best_i;
 
     // SIMD-native best trackers indexed by DP column. Updated branchlessly
+    // in the hot loop; extracted into the per-lane arrays after the pass.
+    std::vector<simd_t> best_wMid_phys, best_wEnd_phys, best_i_phys;
+
     // Per-row per-lane band bounds for X-drop tracking (j coords)
     std::array<std::vector<int>, simdWidth> fwd_band_lo, fwd_band_hi;
     std::array<std::vector<int>, simdWidth> rev_band_lo, rev_band_hi;
 
-    // Per-lane cumulative sequence offset for band harmonization
-    std::array<int64_t, simdWidth> seq_offset = {};
-    // Reusable temp buffer for column shifting
-    std::vector<Float> shift_buf;
     // Current DP column count (= max sequence length in batch)
     int active_dp_width = 0;
 };
@@ -1457,6 +1458,10 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
             scratch.best_wEnd[k].assign(len, Float(0.0));
             scratch.best_i[k].assign(len, -1);
         }
+        size_t nphys = scratch.active_dp_width + 4;
+        scratch.best_wMid_phys.assign(nphys, simd_t(-INFINITY));
+        scratch.best_wEnd_phys.assign(nphys, simd_t(0.0));
+        scratch.best_i_phys.assign(nphys, simd_t(0.0));
     }
     for (int j = 0; j < scratch.active_dp_width; j++) {
         simd_t exponent = -null_prob_per_pos * (Float)(j + 1) + null_probs_prefix[j];
@@ -1682,25 +1687,16 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
             if (w0_row_ip1)
                 w0_row_ip1[j] += X_ij + Y0_curr[j] + C_delta1 * w2 + C_delta2 * w1;
 
-            // Per-lane anchor tracking — update best values per logical position
+            // Per-lane anchor tracking — branchless SIMD update per DP column
             if (in_band) {
                 if (!capture_bands) {
-                alignas(64) Float wMid_arr[simdWidth], w0_arr[simdWidth];
-                simd_unchecked_store(wMid, wMid_arr, Kokkos::Experimental::simd_flag_default);
-                simd_unchecked_store(w0, w0_arr, Kokkos::Experimental::simd_flag_default);
-
-                for (int k = 0; k < activeCount; k++) {
-                    int logical_j = j - scratch.seq_offset[k];
-                    if (logical_j >= 0 && logical_j < (int)decoded[k]->size()) {
-                        if (wMid_arr[k] > scratch.best_wMid[k][logical_j]) {
-                            scratch.best_wMid[k][logical_j] = wMid_arr[k];
-                            scratch.best_wEnd[k][logical_j] = w0_arr[k];
-                            scratch.best_i[k][logical_j] = i;
-                        }
+                    auto better_mask = wMid > scratch.best_wMid_phys[j];
+                    if (Kokkos::Experimental::any_of(better_mask)) {
+                        scratch.best_wMid_phys[j] = Kokkos::max(scratch.best_wMid_phys[j], wMid);
+                        scratch.best_wEnd_phys[j] = Kokkos::Experimental::condition(better_mask, w0, scratch.best_wEnd_phys[j]);
+                        scratch.best_i_phys[j] = Kokkos::Experimental::condition(better_mask, simd_t((Float)i), scratch.best_i_phys[j]);
                     }
                 }
-                }
-
             }
         }
 
@@ -1843,6 +1839,19 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
             }
         }
         return;
+    }
+
+    // Extract per-lane anchor trackers from the physical SIMD layout.
+    for (int idx = 0; idx < activeCount; idx++) {
+        int len = (int)decoded[idx]->size();
+        for (int j = 0; j < scratch.active_dp_width && j < len; j++) {
+            Float wMid_k = scratch.best_wMid_phys[j][idx];
+            if (wMid_k > scratch.best_wMid[idx][j]) {
+                scratch.best_wMid[idx][j] = wMid_k;
+                scratch.best_wEnd[idx][j] = scratch.best_wEnd_phys[j][idx];
+                scratch.best_i[idx][j] = (int)scratch.best_i_phys[j][idx];
+            }
+        }
     }
 
     for (int idx = 0; idx < activeCount; idx++) {
