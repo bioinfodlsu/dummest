@@ -156,7 +156,7 @@ def main():
             gpu_flag = "0" if args.no_gpu else "1"
             if args.no_gpu:
                 print("# Running MMseqs2 in CPU-only mode (--gpu 0)")
-            subprocess.run(["mmseqs", "createdb", prot_fa_path, target_db_pad, "--gpu", gpu_flag], check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(["mmseqs", "createdb", prot_fa_path, target_db_pad, "--gpu", gpu_flag, "--threads", cpus], check=True, stdout=subprocess.DEVNULL)
 
         if args.query_db:
             query_db = args.query_db
@@ -165,7 +165,7 @@ def main():
             query_db = os.path.join(db_dir, "queryDB")
             msa_db = os.path.join(db_dir, "msa_db")
             subprocess.run(["mmseqs", "convertmsa", msa_file, msa_db, "--identifier-field", "0"], check=True, stdout=subprocess.DEVNULL)
-            subprocess.run(["mmseqs", "msa2profile", msa_db, query_db], check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(["mmseqs", "msa2profile", msa_db, query_db, "--threads", cpus], check=True, stdout=subprocess.DEVNULL)
 
         mmseqs_cmd = [
             "mmseqs", "search", query_db, target_db_pad, ali_file, tmpdir,
@@ -192,7 +192,7 @@ def main():
         # ]
 
         subprocess.run(mmseqs_cmd, check=True)
-        subprocess.run(["mmseqs", "convertalis", query_db, target_db_pad, ali_file, tmp_file], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(["mmseqs", "convertalis", query_db, target_db_pad, ali_file, tmp_file, "--threads", cpus], check=True, stdout=subprocess.DEVNULL)
 
         # ---------------------------------------------------------
         # 4. Map Amino Acid Hits -> Genomic DNA Windows
