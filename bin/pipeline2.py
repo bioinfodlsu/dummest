@@ -38,8 +38,8 @@ def main():
     parser.add_argument("--no-gpu", action="store_true",
                         help="Run MMseqs2 on CPU only (passes --gpu 0 to createdb and search instead of --gpu 1). "
                              "Cannot be combined with --prefilter-mode 3, which requires GPU.")
-    parser.add_argument("--prefilter-pvalue", dest="prefilter_pvalue", type=float, default=0.01,
-                        help="MMseqs2 prefilter p-value (default: 0.01). "
+    parser.add_argument("--prefilter-pvalue", dest="prefilter_pvalue", type=float, default=0.1,
+                        help="MMseqs2 prefilter p-value (default: 0.1). "
                              "Passed as -e <nseq*6*pvalue> to 'mmseqs search'. "
                              "Ignored in --max mode, which skips MMseqs2.")
     parser.add_argument("--insert1", type=float, default=None,
@@ -216,16 +216,16 @@ def main():
             "mmseqs", "search", query_db, target_db_pad, ali_file, tmpdir,
             "--gpu", "0" if args.no_gpu else "1",
             "--threads", cpus,
-            #"-e", "10000",
             "-e", str(len(dna_seqs) * 6 * args.prefilter_pvalue), # p-value (default 0.01)
             "--max-seqs", "1000",
-            #"--min-ungapped-score", "0",
-            #"--num-iterations", "3",
             "--alignment-mode", "2",
         ]
         if args.prefilter_mode is not None:
             mmseqs_cmd.extend(["--prefilter-mode", str(args.prefilter_mode)])
             mmseqs_cmd[mmseqs_cmd.index("--alignment-mode") + 1] = "1"
+        if args.no_gpu:
+            mmseqs_cmd.extend(["--spaced-kmer-mode", "0"])
+            mmseqs_cmd.extend(["-s", "7.5"])
 
         # mmseqs_cmd = [
         #     "mmseqs", "search", query_db, target_db_pad, ali_file, tmpdir,
@@ -427,7 +427,7 @@ def main():
             #custom_env["ASAN_OPTIONS"] = "detect_container_overflow=1:strict_memcmp=1"
             
             try:
-                subprocess.run([dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-W', '0.001' if not args.max else '10', '-N', str(tot_seq_len)] + dummer_extra_args, env=custom_env, check=True)
+                subprocess.run([dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-W', '0.1' if not args.max else '10', '-N', str(tot_seq_len)] + dummer_extra_args, env=custom_env, check=True)
             except subprocess.CalledProcessError as e:
                 print(f"Error: dummer encountered an issue (Exit status: {e.returncode})")
                 sys.exit(1)
