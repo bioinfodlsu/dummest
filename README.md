@@ -120,10 +120,14 @@ Other supported pipeline options include:
 * `--prefilter-mode 3`: use MMseqs2's GPU combined ungapped and gapped
   prefilter mode.
 * `--no-gpu`: run MMseqs2 on CPU only (passes `--gpu 0` to `createdb` and `search`); it cannot be combined with `--prefilter-mode 3`.
-* `--prefilter-pvalue F` (default: `0.01`): MMseqs2 prefilter p-value.
+* `--prefilter-pvalue F` (default: `0.1`): MMseqs2 prefilter p-value.
   The pipeline passes `-e <nseq*6*F>` to `mmseqs search`, where `nseq`
   is the number of genome entries. Ignored in `--max` mode, which
   skips MMseqs2.
+* `--prefilter-max-seqs N` (default: `1000`): MMseqs2 `--max-seqs` — max
+  prefilter results per query profile / protein family allowed to pass
+  the prefilter. Passed as `--max-seqs` to `mmseqs search`. Ignored in
+  `--max` mode, which skips MMseqs2.
 * `--insert1/--insert2/--delete1/--delete2`, `--stop-codon-prob`,
   `--bg-stop-codon-prob`, `--tantan-threshold`: forwarded to DUMMER
   (see below); unset means use the DUMMER default.
