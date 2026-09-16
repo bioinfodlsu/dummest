@@ -38,11 +38,55 @@ def main():
     parser.add_argument("--no-gpu", action="store_true",
                         help="Run MMseqs2 on CPU only (passes --gpu 0 to createdb and search instead of --gpu 1). "
                              "Cannot be combined with --prefilter-mode 3, which requires GPU.")
+    parser.add_argument("--prefilter-pvalue", dest="prefilter_pvalue", type=float, default=0.01,
+                        help="MMseqs2 prefilter p-value (default: 0.01). "
+                             "Passed as -e <nseq*6*pvalue> to 'mmseqs search'. "
+                             "Ignored in --max mode, which skips MMseqs2.")
+    parser.add_argument("--insert1", type=float, default=None,
+                        help="DUMMER 1-base insertion rate per base (default: dummer default 0.0171)")
+    parser.add_argument("--insert2", type=float, default=None,
+                        help="DUMMER 2-base insertion rate per base (default: dummer default 0.0018)")
+    parser.add_argument("--delete1", type=float, default=None,
+                        help="DUMMER 1-base deletion rate per base (default: dummer default 0.0328)")
+    parser.add_argument("--delete2", type=float, default=None,
+                        help="DUMMER 2-base deletion rate per base (default: dummer default 0.0083)")
+    parser.add_argument("--stop-codon-prob", dest="stop_codon_prob", type=float, default=None,
+                        help="DUMMER stop codon probability (default: dummer default 0.0005)")
+    parser.add_argument("--bg-stop-codon-prob", dest="bg_stop_codon_prob", type=float, default=None,
+                        help="DUMMER background stop codon probability (default: dummer default 0.046875)")
+    parser.add_argument("--tantan-threshold", dest="tantan_threshold", type=float, default=None,
+                        help="DUMMER tantan masking threshold (default: dummer default 0.5)")
 
     args = parser.parse_args()
 
     if args.no_gpu and args.prefilter_mode == 3:
         parser.error("--prefilter-mode 3 requires GPU; remove --no-gpu or drop --prefilter-mode 3")
+
+    if args.prefilter_pvalue is None or not args.prefilter_pvalue >= 0:
+        parser.error("--prefilter-pvalue must be >= 0")
+    for _name in ("insert1", "insert2", "delete1", "delete2",
+                  "stop_codon_prob", "bg_stop_codon_prob"):
+        _v = getattr(args, _name)
+        if _v is not None and not 0 <= _v < 1:
+            parser.error(f"--{_name.replace('_', '-')} must be in [0, 1)")
+    if args.tantan_threshold is not None and not 0 <= args.tantan_threshold <= 1:
+        parser.error("--tantan-threshold must be in [0, 1]")
+
+    dummer_extra_args = []
+    if args.insert1 is not None:
+        dummer_extra_args += ["--insert1", str(args.insert1)]
+    if args.insert2 is not None:
+        dummer_extra_args += ["--insert2", str(args.insert2)]
+    if args.delete1 is not None:
+        dummer_extra_args += ["--delete1", str(args.delete1)]
+    if args.delete2 is not None:
+        dummer_extra_args += ["--delete2", str(args.delete2)]
+    if args.stop_codon_prob is not None:
+        dummer_extra_args += ["--stop-codon-prob", str(args.stop_codon_prob)]
+    if args.bg_stop_codon_prob is not None:
+        dummer_extra_args += ["--bg-stop-codon-prob", str(args.bg_stop_codon_prob)]
+    if args.tantan_threshold is not None:
+        dummer_extra_args += ["--tantan-threshold", str(args.tantan_threshold)]
 
     hmm_file = args.hmm_file
     msa_file = args.msa_file
@@ -113,7 +157,8 @@ def main():
         if not args.skip_dummer:
             try:
                 subprocess.run(
-                    [dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-W', '0.1', '-N', str(tot_seq_len)],
+                    [dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-W', '0.1', '-N', str(tot_seq_len)]
+                    + dummer_extra_args,
                     env=os.environ.copy(), check=True,
                 )
             except subprocess.CalledProcessError as e:
@@ -172,7 +217,7 @@ def main():
             "--gpu", "0" if args.no_gpu else "1",
             "--threads", cpus,
             #"-e", "10000",
-            "-e", str(len(dna_seqs) * 6 * 0.01), # p-value 0.01
+            "-e", str(len(dna_seqs) * 6 * args.prefilter_pvalue), # p-value (default 0.01)
             "--max-seqs", "1000",
             #"--min-ungapped-score", "0",
             #"--num-iterations", "3",
@@ -382,7 +427,7 @@ def main():
             #custom_env["ASAN_OPTIONS"] = "detect_container_overflow=1:strict_memcmp=1"
             
             try:
-                subprocess.run([dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-W', '0.001' if not args.max else '10', '-N', str(tot_seq_len)], env=custom_env, check=True)
+                subprocess.run([dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-W', '0.001' if not args.max else '10', '-N', str(tot_seq_len)] + dummer_extra_args, env=custom_env, check=True)
             except subprocess.CalledProcessError as e:
                 print(f"Error: dummer encountered an issue (Exit status: {e.returncode})")
                 sys.exit(1)

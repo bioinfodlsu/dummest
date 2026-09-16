@@ -120,6 +120,13 @@ Other supported pipeline options include:
 * `--prefilter-mode 3`: use MMseqs2's GPU combined ungapped and gapped
   prefilter mode.
 * `--no-gpu`: run MMseqs2 on CPU only (passes `--gpu 0` to `createdb` and `search`); it cannot be combined with `--prefilter-mode 3`.
+* `--prefilter-pvalue F` (default: `0.01`): MMseqs2 prefilter p-value.
+  The pipeline passes `-e <nseq*6*F>` to `mmseqs search`, where `nseq`
+  is the number of genome entries. Ignored in `--max` mode, which
+  skips MMseqs2.
+* `--insert1/--insert2/--delete1/--delete2`, `--stop-codon-prob`,
+  `--bg-stop-codon-prob`, `--tantan-threshold`: forwarded to DUMMER
+  (see below); unset means use the DUMMER default.
 
 ### Example
 
@@ -164,6 +171,35 @@ Turn off simple-sequence detection:
 `-m0` means find simple regions in neither profile nor sequence, `-m1`
 means find them in profiles only, `-m2` means sequences only, and
 `-m3` means both (the default).
+
+### Frameshifts, stop codons, and masking thresholds
+
+These DUMMER options override the compiled-in defaults (current
+defaults in parentheses). They are also accepted by
+`bin/pipeline2.py`, which forwards them to its DUMMER invocation:
+
+* `--insert1 F` (default: `0.0171`): 1-base insertion rate per base.
+* `--insert2 F` (default: `0.0018`): 2-base insertion rate per base.
+* `--delete1 F` (default: `0.0328`): 1-base deletion rate per base.
+* `--delete2 F` (default: `0.0083`): 2-base deletion rate per base.
+* `--stop-codon-prob F` (default: `0.0005`): stop codon probability.
+* `--bg-stop-codon-prob F` (default: `0.046875`): background stop codon
+  probability.
+* `--tantan-threshold F` (default: `0.5`): tantan simple-region masking
+  threshold.
+
+The 1-bp background frameshift branch is `insert1 + delete2` and the
+2-bp branch is `insert2 + delete1`. For example:
+
+    dummer --insert1 0.02 --delete1 0.03 profiles.hmm sequences.fasta
+
+    python3 bin/pipeline2.py profile.hmm profile.msa genome.fa 8 --insert1 0.02 --prefilter-pvalue 0.05 --dummer-bin bin/dummer
+
+DUMMER prints the active values at startup and includes them in its
+*E*-value calibration cache hash, so changing them invalidates stale
+cache entries. See
+[`docs/frameshift-rate-approximation.md`](docs/frameshift-rate-approximation.md)
+for how the default indel rates were approximated.
 
 ## Unusual symbols in sequences
 

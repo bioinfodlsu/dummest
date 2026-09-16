@@ -59,6 +59,13 @@
 #define OPT_b 100
 #define OPT_x 1e-5 // 0 to enable full DP mode
 #define OPT_v 0.1
+#define OPT_insert1 0.0171
+#define OPT_insert2 0.0018
+#define OPT_delete1 0.0328
+#define OPT_delete2 0.0083
+#define OPT_stop 0.0005
+#define OPT_bg_stop 0.046875 // 3/64
+#define OPT_tantan 0.5
 #define EVALUE
 #define ALIGN
 
@@ -67,6 +74,20 @@
 
 // uncomment to use codon probabilities instead of base probabilities to generate random sequences
 #define ESTIMATOR_USE_RANDOM_CODONS
+
+// Frameshift / stop-codon / masking parameters (user-configurable via CLI,
+// defaults are the OPT_* values above).  BACKGROUND_* are derived as:
+//   BACKGROUND_FRAMESHIFT_RATE = INSERT1 + DELETE2 (1-bp branch)
+//   BACKGROUND_FRAMESHIFT_RATE_2 = INSERT2 + DELETE1 (2-bp branch)
+enum {
+    OPT_INSERT1_CODE = 1000,
+    OPT_INSERT2_CODE,
+    OPT_DELETE1_CODE,
+    OPT_DELETE2_CODE,
+    OPT_STOP_CODE,
+    OPT_BG_STOP_CODE,
+    OPT_TANTAN_CODE
+};
 
 #ifdef DOUBLE
 typedef double Float;
@@ -80,18 +101,23 @@ const int simdLen = simdFltLen;
 using simd_t = Kokkos::Experimental::simd<Float>;
 constexpr auto simdWidth = simd_t::size();
 
-const Float STOP_CODON_PROB = 0.0005;
-const Float BG_STOP_CODON_PROB = 0.046875; // 3/64
+Float STOP_CODON_PROB = OPT_stop;
+Float BG_STOP_CODON_PROB = OPT_bg_stop; // 3/64
 
-const Float INSERT1 = 0.0171;
-const Float INSERT2 = 0.0018;
-const Float DELETE1 = 0.0328;
-const Float DELETE2 = 0.0083;
+Float INSERT1 = OPT_insert1;
+Float INSERT2 = OPT_insert2;
+Float DELETE1 = OPT_delete1;
+Float DELETE2 = OPT_delete2;
 
-const Float BACKGROUND_FRAMESHIFT_RATE = INSERT1 + DELETE2;
-const Float BACKGROUND_FRAMESHIFT_RATE_2 = INSERT2 + DELETE1;
+Float BACKGROUND_FRAMESHIFT_RATE = INSERT1 + DELETE2;
+Float BACKGROUND_FRAMESHIFT_RATE_2 = INSERT2 + DELETE1;
 
-#define TANTAN_MASK_THRESHOLD 0.5
+Float TANTAN_MASK_THRESHOLD = OPT_tantan;
+
+static void updateBackgroundFrameshiftRates() {
+    BACKGROUND_FRAMESHIFT_RATE = INSERT1 + DELETE2;
+    BACKGROUND_FRAMESHIFT_RATE_2 = INSERT2 + DELETE1;
+}
 
 int simdRoundUp(int x) { // lowest multiple of simdLen that is >= x
     return x - 1 - (x - 1) % simdLen + simdLen;
@@ -3438,7 +3464,7 @@ void makeMaskedSequence(char *sequence, int length, int alphabetSize) {
     calcTantanProbabilities((const unsigned char *)seq2.c_str(), length, false, tantanProbs.data());
     int mask = alphabetSize + 2;
     for (int i = 0; i < length; ++i) {
-        sequence[length + i] = (tantanProbs[i] < 0.5) ? sequence[i] : mask;
+        sequence[length + i] = (tantanProbs[i] < TANTAN_MASK_THRESHOLD) ? sequence[i] : mask;
     }
 }
 
@@ -3501,6 +3527,16 @@ Options for background letter probabilities:\n\
   --bgeometric      geometric mean of position-specific probabilities (default)\n\
   --bmedian         median of position-specific probabilities\n\
 \n\
+Options for frameshifts, stop codons, and masking:\n\
+  --insert1 F       1-base insertion rate per base (default: " STR(OPT_insert1) ")\n\
+  --insert2 F       2-base insertion rate per base (default: " STR(OPT_insert2) ")\n\
+  --delete1 F       1-base deletion rate per base (default: " STR(OPT_delete1) ")\n\
+  --delete2 F       2-base deletion rate per base (default: " STR(OPT_delete2) ")\n\
+  --stop-codon-prob F  stop codon probability (default: " STR(OPT_stop) ")\n\
+  --bg-stop-codon-prob F  background stop codon probability (default: " STR(OPT_bg_stop) ")\n\
+  --tantan-threshold F  tantan masking threshold (default: " STR(OPT_tantan) ")\n\
+                    1-bp frameshift branch = insert1 + delete2; 2-bp branch = insert2 + delete1\n\
+\n\
 Environment:\n\
   DUMMER_CACHE_IGNORE_BINARY_HASH=1  reuse the E-value calibration cache across rebuilds\n"
 #ifdef FORWARD_ONLY_FILTER
@@ -3532,6 +3568,13 @@ Int Forward-only pre-filter options:\n\
                                     {"barithmetic", no_argument, 0, 'A'},
                                     {"bgeometric", no_argument, 0, 'G'},
                                     {"bmedian", no_argument, 0, 'M'},
+                                    {"insert1", required_argument, 0, OPT_INSERT1_CODE},
+                                    {"insert2", required_argument, 0, OPT_INSERT2_CODE},
+                                    {"delete1", required_argument, 0, OPT_DELETE1_CODE},
+                                    {"delete2", required_argument, 0, OPT_DELETE2_CODE},
+                                    {"stop-codon-prob", required_argument, 0, OPT_STOP_CODE},
+                                    {"bg-stop-codon-prob", required_argument, 0, OPT_BG_STOP_CODE},
+                                    {"tantan-threshold", required_argument, 0, OPT_TANTAN_CODE},
 #ifdef FORWARD_ONLY_FILTER
                                      {"forward-only-evalue", required_argument, 0, 'W'},
 #endif
@@ -3616,6 +3659,41 @@ Int Forward-only pre-filter options:\n\
         case 'M':
             backgroundProbsType = 'M';
             break;
+        case OPT_INSERT1_CODE:
+            INSERT1 = strtod(optarg, 0);
+            if (!(INSERT1 >= 0 && INSERT1 < 1))
+                return badOpt();
+            break;
+        case OPT_INSERT2_CODE:
+            INSERT2 = strtod(optarg, 0);
+            if (!(INSERT2 >= 0 && INSERT2 < 1))
+                return badOpt();
+            break;
+        case OPT_DELETE1_CODE:
+            DELETE1 = strtod(optarg, 0);
+            if (!(DELETE1 >= 0 && DELETE1 < 1))
+                return badOpt();
+            break;
+        case OPT_DELETE2_CODE:
+            DELETE2 = strtod(optarg, 0);
+            if (!(DELETE2 >= 0 && DELETE2 < 1))
+                return badOpt();
+            break;
+        case OPT_STOP_CODE:
+            STOP_CODON_PROB = strtod(optarg, 0);
+            if (!(STOP_CODON_PROB >= 0 && STOP_CODON_PROB < 1))
+                return badOpt();
+            break;
+        case OPT_BG_STOP_CODE:
+            BG_STOP_CODON_PROB = strtod(optarg, 0);
+            if (!(BG_STOP_CODON_PROB >= 0 && BG_STOP_CODON_PROB < 1))
+                return badOpt();
+            break;
+        case OPT_TANTAN_CODE:
+            TANTAN_MASK_THRESHOLD = strtod(optarg, 0);
+            if (!(TANTAN_MASK_THRESHOLD >= 0 && TANTAN_MASK_THRESHOLD <= 1))
+                return badOpt();
+            break;
 #ifdef FORWARD_ONLY_FILTER
         case 'W':
             forward_only_evalue_opt = strtod(optarg, 0);
@@ -3631,6 +3709,12 @@ Int Forward-only pre-filter options:\n\
 
     if (filterStdDev > 0)
         maskOpt &= 2; // filtering turns off profile-masking
+
+    updateBackgroundFrameshiftRates();
+    if (!(INSERT1 + INSERT2 + DELETE1 + DELETE2 < 1))
+        return badOpt();
+    if (!(BACKGROUND_FRAMESHIFT_RATE + BACKGROUND_FRAMESHIFT_RATE_2 < 1))
+        return badOpt();
 
     if (argc - optind < 1 || argc - optind > 2) {
         std::cerr << help;
@@ -3680,6 +3764,10 @@ Int Forward-only pre-filter options:\n\
               << " of foreground probabilities\n";
     std::cout << "# Random sequences: trials=" << randomSeqNum << " length=" << randomSeqLen
               << " border=" << border << "\n";
+    std::cout << "# Frameshift rates: insert1=" << INSERT1 << " insert2=" << INSERT2
+              << " delete1=" << DELETE1 << " delete2=" << DELETE2 << "\n";
+    std::cout << "# Stop codon probs: stop=" << STOP_CODON_PROB << " bg-stop=" << BG_STOP_CODON_PROB
+              << " tantan-threshold=" << TANTAN_MASK_THRESHOLD << "\n";
     if (maskOpt & 1)
         std::cout << "# Masking simple regions in profiles\n";
     if (argc - optind > 1) {
