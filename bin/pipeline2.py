@@ -164,7 +164,7 @@ def main():
         if not args.skip_dummer:
             try:
                 subprocess.run(
-                    [dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-W', '0.1', '-N', str(tot_seq_len)]
+                    [dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '--max', '-N', str(tot_seq_len)]
                     + dummer_extra_args,
                     env=os.environ.copy(), check=True,
                 )

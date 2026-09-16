@@ -86,7 +86,8 @@ enum {
     OPT_DELETE2_CODE,
     OPT_STOP_CODE,
     OPT_BG_STOP_CODE,
-    OPT_TANTAN_CODE
+    OPT_TANTAN_CODE,
+    OPT_MAX_CODE
 };
 
 #ifdef DOUBLE
@@ -3478,6 +3479,7 @@ int main(int argc, char *argv[]) {
     double evalueOpt = OPT_e;
     int strandOpt = OPT_s;
     int maskOpt = OPT_m;
+    bool maxModeOpt = false;
 #ifdef FORWARD_ONLY_FILTER
     double forward_only_evalue_opt = OPT_v;
 #endif
@@ -3538,7 +3540,10 @@ Options for frameshifts, stop codons, and masking:\n\
                     1-bp frameshift branch = insert1 + delete2; 2-bp branch = insert2 + delete1\n\
 \n\
 Environment:\n\
-  DUMMER_CACHE_IGNORE_BINARY_HASH=1  reuse the E-value calibration cache across rebuilds\n"
+  DUMMER_CACHE_IGNORE_BINARY_HASH=1  reuse the E-value calibration cache across rebuilds\n\
+\n\
+Max sensitivity:\n\
+  --max             skip/bypass forward-only pre-filter (overrides -W/--forward-only-evalue)\n"
 #ifdef FORWARD_ONLY_FILTER
 "\n\
 Int Forward-only pre-filter options:\n\
@@ -3575,6 +3580,7 @@ Int Forward-only pre-filter options:\n\
                                     {"stop-codon-prob", required_argument, 0, OPT_STOP_CODE},
                                     {"bg-stop-codon-prob", required_argument, 0, OPT_BG_STOP_CODE},
                                     {"tantan-threshold", required_argument, 0, OPT_TANTAN_CODE},
+                                    {"max", no_argument, 0, OPT_MAX_CODE},
 #ifdef FORWARD_ONLY_FILTER
                                      {"forward-only-evalue", required_argument, 0, 'W'},
 #endif
@@ -3701,6 +3707,9 @@ Int Forward-only pre-filter options:\n\
                 return badOpt();
             break;
 #endif
+        case OPT_MAX_CODE:
+            maxModeOpt = true;
+            break;
         case '?':
             std::cerr << help;
             return 1;
@@ -3715,6 +3724,12 @@ Int Forward-only pre-filter options:\n\
         return badOpt();
     if (!(BACKGROUND_FRAMESHIFT_RATE + BACKGROUND_FRAMESHIFT_RATE_2 < 1))
         return badOpt();
+
+#ifdef FORWARD_ONLY_FILTER
+    // --max always wins over -W/--forward-only-evalue: bypass the prefilter.
+    if (maxModeOpt)
+        forward_only_evalue_opt = -1;
+#endif
 
     if (argc - optind < 1 || argc - optind > 2) {
         std::cerr << help;
@@ -3767,7 +3782,9 @@ Int Forward-only pre-filter options:\n\
     std::cout << "# Frameshift rates: insert1=" << INSERT1 << " insert2=" << INSERT2
               << " delete1=" << DELETE1 << " delete2=" << DELETE2 << "\n";
     std::cout << "# Stop codon probs: stop=" << STOP_CODON_PROB << " bg-stop=" << BG_STOP_CODON_PROB
-              << " tantan-threshold=" << TANTAN_MASK_THRESHOLD << "\n";
+               << " tantan-threshold=" << TANTAN_MASK_THRESHOLD << "\n";
+    if (maxModeOpt)
+        std::cout << "# Max mode: forward-only pre-filter disabled\n";
     if (maskOpt & 1)
         std::cout << "# Masking simple regions in profiles\n";
     if (argc - optind > 1) {
