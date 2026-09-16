@@ -39,9 +39,14 @@ def main():
                         help="Run MMseqs2 on CPU only (passes --gpu 0 to createdb and search instead of --gpu 1). "
                              "Cannot be combined with --prefilter-mode 3, which requires GPU.")
     parser.add_argument("--prefilter-pvalue", dest="prefilter_pvalue", type=float, default=0.1,
-                        help="MMseqs2 prefilter p-value (default: 0.1). "
-                             "Passed as -e <nseq*6*pvalue> to 'mmseqs search'. "
-                             "Ignored in --max mode, which skips MMseqs2.")
+                         help="MMseqs2 prefilter p-value (default: 0.1). "
+                              "Passed as -e <nseq*6*pvalue> to 'mmseqs search'. "
+                              "Ignored in --max mode, which skips MMseqs2.")
+    parser.add_argument("--prefilter-max-seqs", dest="prefilter_max_seqs", type=int, default=1000,
+                         help="MMseqs2 prefilter max seqs per protein family "
+                              "(per query profile) allowed to pass the prefilter (default: 1000). "
+                              "Passed as --max-seqs to 'mmseqs search'. "
+                              "Ignored in --max mode, which skips MMseqs2.")
     parser.add_argument("--insert1", type=float, default=None,
                         help="DUMMER 1-base insertion rate per base (default: dummer default 0.0171)")
     parser.add_argument("--insert2", type=float, default=None,
@@ -64,6 +69,8 @@ def main():
 
     if args.prefilter_pvalue is None or not args.prefilter_pvalue >= 0:
         parser.error("--prefilter-pvalue must be >= 0")
+    if args.prefilter_max_seqs is None or args.prefilter_max_seqs < 1:
+        parser.error("--prefilter-max-seqs must be >= 1")
     for _name in ("insert1", "insert2", "delete1", "delete2",
                   "stop_codon_prob", "bg_stop_codon_prob"):
         _v = getattr(args, _name)
@@ -217,7 +224,7 @@ def main():
             "--gpu", "0" if args.no_gpu else "1",
             "--threads", cpus,
             "-e", str(len(dna_seqs) * 6 * args.prefilter_pvalue), # p-value (default 0.01)
-            "--max-seqs", "1000",
+            "--max-seqs", str(args.prefilter_max_seqs),
             "--alignment-mode", "2",
         ]
         if args.prefilter_mode is not None:
