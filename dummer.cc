@@ -1434,8 +1434,8 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
                     sr_n2 * C_delta1 +
                     sr_n1 * C_delta2 +
                     Z0_ring[r_3] * bg_codon_emit_probs * C_alpha0 +
-                    sr_c2 * C_alpha1 +
-                    sr_c1 * C_alpha2
+                    sr_c2 * C_alpha2 +
+                    sr_c1 * C_alpha1
                  + null_model_prefix[j] * (row_has_seeds ?  null_gate[j] : simd_t(1)) * C_scale;
 
                 // Apply per-lane band mask first so X-drop threshold is correct
@@ -2205,8 +2205,8 @@ void findSimilaritiesBackwardOnly(
                 sr_n2 * C_delta1 +
                 sr_n1 * C_delta2 +
                 Z0_ring[r_3] * bg_codon_emit_probs * C_alpha0 +
-                sr_c2 * C_alpha1 +
-                sr_c1 * C_alpha2
+                sr_c2 * C_alpha2 +
+                sr_c1 * C_alpha1
              + null_model_suffix[j] * C_scale;
 
             simd_t mid_score = w_val * null_model_prefix[j];
