@@ -738,8 +738,8 @@ struct DPScratch {
     PaddedVec<simd_t, 0, 0> null_probs_prefix, null_probs_suffix;
     PaddedVec<simd_t, 0, 0> Y0_next, Y0_curr;
     PaddedVec<simd_t, 0, 0> null_model_prefix, null_model_suffix;
-    PaddedVec<simd_t, 3, 0> right_side;
-    PaddedVec<simd_t, 0, 3> left_side;
+    PaddedVec<simd_t, 3, 0> right_side, right_side_EV;
+    PaddedVec<simd_t, 0, 3> left_side, left_side_EV;
     std::array<std::vector<AlignedSimilarity>, simdWidth> opt_profile_position;
     std::array<std::vector<bool>, simdWidth> aligned;
     std::vector<uint8_t> transposed_decoded;
@@ -784,7 +784,7 @@ void addForwardAlignment(int idx, size_t profileLength, std::vector<SegmentPair>
             DP_Cell_v2{.metric=(abs_pos + 3 < cols ? scratch.X.get_lane(i, abs_pos + 3, idx) + scratch.W1.get_lane(i + 1, abs_pos + 3, idx) : -INFINITY), .i=i + 1, .j=abs_pos + 3, .emit=true},
             DP_Cell_v2{.metric=scratch.W1.get_lane(i + 1, abs_pos, idx), .i=i + 1, .j=abs_pos, .emit=false},
             DP_Cell_v2{.metric=scratch.W1.get_lane(i, abs_pos + 1, idx), .i=i, .j=abs_pos + 1, .emit=false},
-            DP_Cell_v2{.metric=scratch.left_side[abs_pos][idx], .i=INT_MAX, .j=INT_MAX, .emit=false},
+            DP_Cell_v2{.metric=scratch.left_side_EV[abs_pos][idx], .i=INT_MAX, .j=INT_MAX, .emit=false},
         });
 
         if (choice.emit) {
@@ -806,7 +806,7 @@ void addReverseAlignment(int idx, std::vector<SegmentPair> &alignment, int iEnd,
             DP_Cell_v2{.metric=(abs_pos >= 3 ? scratch.X.get_lane(i, abs_pos, idx) + opt_succ : -INFINITY), .i=i - 1, .j=abs_pos - 3, .emit=true},
             DP_Cell_v2{.metric=(i >= 1 ? scratch.X_pfx.get_lane(i - 1, abs_pos, idx) : -INFINITY), .i=i - 1, .j=abs_pos, .emit=false},
             DP_Cell_v2{.metric=(abs_pos > 0 ? scratch.X_pfx.get_lane(i, abs_pos - 1, idx) : -INFINITY), .i=i, .j=abs_pos - 1, .emit=false},
-            DP_Cell_v2{.metric=scratch.right_side[abs_pos][idx], .i=-1, .j=-1, .emit=false},
+            DP_Cell_v2{.metric=scratch.right_side_EV[abs_pos][idx], .i=-1, .j=-1, .emit=false},
         });
 
         if (choice.emit) {
@@ -1300,9 +1300,13 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
     auto &null_model_suffix = scratch.null_model_suffix; null_model_suffix = null_model_prefix;
     auto &left_side = scratch.left_side;
     auto &right_side = scratch.right_side;
+    auto &left_side_EV = scratch.left_side_EV;
+    auto &right_side_EV = scratch.right_side_EV;
 #ifdef ALIGN
     left_side.assign(null_model_prefix.size(), 0.0);
     right_side.assign(null_model_prefix.size(), 0.0);
+    left_side_EV.assign(null_model_prefix.size(), 0.0);
+    right_side_EV.assign(null_model_prefix.size(), 0.0);
     if (!capture_bands) {
         scratch.X.assign(profile.length + 2, scratch.active_dp_width + 4);
         scratch.X_pfx.assign(profile.length + 2, scratch.active_dp_width + 4);
@@ -1573,11 +1577,16 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
         right_side[j - 1] += (Float)(BACKGROUND_FRAMESHIFT_RATE * 0.25) * null_emit_1 * right_side[j];
         right_side[j - 2] += (Float)(BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625) * null_emit_2 * right_side[j];
 
-        right_side[j] *= null_model_prefix[j]; // TODO: this one specifically (might be off by 1 idk)
+        right_side_EV[j - 3] += (Float)(1 - BACKGROUND_FRAMESHIFT_RATE - BACKGROUND_FRAMESHIFT_RATE_2) * bg_codon_emit_probs *
+                             null_emit_3 * right_side[j];
+        right_side_EV[j - 1] += (Float)(BACKGROUND_FRAMESHIFT_RATE * 0.25) * null_emit_1 * (Float)(1.0 / 3.0) * right_side[j];
+        right_side_EV[j - 2] += (Float)(BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625) * null_emit_2 * (Float)(2.0 / 3.0) * right_side[j];
+
+        right_side_EV[j] *= null_model_prefix[j]; // TODO: this one specifically (might be off by 1 idk)
         right_side[j] = Kokkos::max(right_side[j], Float(0.0));
     }
     for (int j = 1; j < scratch.active_dp_width; j++) {
-        right_side[j] += right_side[j - 1];
+        right_side_EV[j] += right_side_EV[j - 1];
     }
     }
 #endif
@@ -1725,7 +1734,7 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
                 pfx_mx = Kokkos::max(pfx_mx, pfx_prev);
 
                 pfx_mx = Kokkos::max(pfx_mx, X_ij_EV + opt_succ);
-                pfx_mx = Kokkos::max(pfx_mx, right_side[j]);
+                pfx_mx = Kokkos::max(pfx_mx, right_side_EV[j]);
                 scatter_xpfx(pfx_mx, i, j);
                 pfx_prev = pfx_mx;
             }
@@ -1868,11 +1877,15 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
         left_side[j + 1] += (Float)(BACKGROUND_FRAMESHIFT_RATE * 0.25) * null_emit_1 * left_side[j];
         left_side[j + 2] += (Float)(BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625) * null_emit_2 * left_side[j];
 
-        left_side[j] *= null_model_suffix[j];
+        left_side_EV[j + 3] += (Float)(1 - BACKGROUND_FRAMESHIFT_RATE - BACKGROUND_FRAMESHIFT_RATE_2) * bg_codon_emit_probs * null_emit_3 * left_side[j];
+        left_side_EV[j + 1] += (Float)(BACKGROUND_FRAMESHIFT_RATE * 0.25) * null_emit_1 * (Float)(1.0 / 3.0) * left_side[j];
+        left_side_EV[j + 2] += (Float)(BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625) * null_emit_2 * (Float)(2.0 / 3.0) * left_side[j];
+
+        left_side_EV[j] *= null_model_suffix[j];
         left_side[j] = Kokkos::max(left_side[j], Float(0.0));
     }
     for (int j = scratch.active_dp_width - 2; j >= 0; j--) {
-        left_side[j] += left_side[j + 1];
+        left_side_EV[j] += left_side_EV[j + 1];
     }
 
     {
@@ -1895,7 +1908,7 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
             simd_t opt_down = ip1_avail ? gather_w1(i + 1, j) : simd_t(0);
 
             auto opt = Kokkos::max(opt_down, opt_right_rolling);
-            opt = Kokkos::max(opt, left_side[j]);
+            opt = Kokkos::max(opt, left_side_EV[j]);
             opt = Kokkos::max(opt, gather_x(i, j) + opt_succ);
             scatter_w1(opt, i, j);
             opt_right_rolling = opt;
