@@ -58,7 +58,6 @@
 #define OPT_l 5000
 #define OPT_b 100
 #define OPT_x 1e-5 // 0 to enable full DP mode
-#define OPT_v 0.1
 #define OPT_insert1 0.0171
 #define OPT_insert2 0.0018
 #define OPT_delete1 0.0328
@@ -2340,13 +2339,14 @@ void findFinalSimilaritiesBatched(std::vector<FinalSimilarity> &similarities,
                                   const std::vector<Profile> &profiles, const char *charVec,
                                   ThreadPool &threadPool, std::vector<DPScratch> &threadScratches
 #ifdef FORWARD_ONLY_FILTER
-                                  , double forward_only_evalue = -1, double totSequenceLength = 0
+                                  , double forward_only_evalue, double totSequenceLength, bool skipPrefilter
 #endif
                                   ) {
 #ifdef FORWARD_ONLY_FILTER
-    // Run Forward-only pre-filter if enabled: filter sequences below threshold
+    // Forward-only pre-filter: same E-value semantics as forward-backward.
+    // No enable threshold gate: it always runs unless bypassed via --max.
     std::vector<std::vector<SequenceRequest>> filteredRequests(profiles.size());
-    if (forward_only_evalue > 0) {
+    if (!skipPrefilter) {
         struct forward_only_job {
             size_t profileIdx;
             size_t startRequestIdx;
@@ -2387,16 +2387,15 @@ void findFinalSimilaritiesBatched(std::vector<FinalSimilarity> &similarities,
                             double log_probRatio = log((double)bestScores[k]);
                             double probRatio = exp(log_probRatio * p.lambda_forward_only);
                             double evalue = p.gumbel_k_forward_only * totSequenceLength / probRatio;
-                            double pvalue = 1.0 - exp(-evalue);
 
                             if (verbosity > 0) {
                                 std::ostringstream s;
-                                s << "# DBG " << p.name << " log: " << log_probRatio << " p: " << pvalue << std::endl;
+                                s << "# DBG " << p.name << " log: " << log_probRatio << " E: " << evalue << std::endl;
 
                                 std::cout << s.str();
                             }
 
-                            if (pvalue <= forward_only_evalue) {
+                            if (evalue <= forward_only_evalue) {
                                 forward_only_job_results[jobIdx].push_back(requests[job.startRequestIdx + k]);
                             }
                         }
@@ -3494,7 +3493,8 @@ int main(int argc, char *argv[]) {
     int maskOpt = OPT_m;
     bool maxModeOpt = false;
 #ifdef FORWARD_ONLY_FILTER
-    double forward_only_evalue_opt = OPT_v;
+    double forward_only_evalue_opt = -1;
+    bool forward_only_evalue_explicit = false;
 #endif
     long long totSequenceLengthOverride = -1;
     double filterStdDev = 0;
@@ -3559,8 +3559,8 @@ Max sensitivity:\n\
   --max             skip/bypass forward-only pre-filter (overrides -W/--forward-only-evalue)\n"
 #ifdef FORWARD_ONLY_FILTER
 "\n\
-Int Forward-only pre-filter options:\n\
-  -W E, --forward-only-evalue E  Forward-only pre-filter E-value threshold (default: " STR(OPT_v) ")\n"
+Forward-only pre-filter options:\n\
+  -W E, --forward-only-evalue E  Forward-only pre-filter E-value threshold (default: value of -e)\n"
 #endif
 ;
 
@@ -3718,6 +3718,7 @@ Int Forward-only pre-filter options:\n\
             forward_only_evalue_opt = strtod(optarg, 0);
             if (forward_only_evalue_opt < 0)
                 return badOpt();
+            forward_only_evalue_explicit = true;
             break;
 #endif
         case OPT_MAX_CODE:
@@ -3739,9 +3740,11 @@ Int Forward-only pre-filter options:\n\
         return badOpt();
 
 #ifdef FORWARD_ONLY_FILTER
-    // --max always wins over -W/--forward-only-evalue: bypass the prefilter.
-    if (maxModeOpt)
-        forward_only_evalue_opt = -1;
+    // -W defaults to the -e value; --max bypasses the prefilter separately
+    // via skipPrefilter (no enable-threshold gate). Note: with -e0 the
+    // prefilter passes nothing unless --max is given.
+    if (!maxModeOpt && !forward_only_evalue_explicit)
+        forward_only_evalue_opt = evalueOpt;
 #endif
 
     if (argc - optind < 1 || argc - optind > 2) {
@@ -3798,6 +3801,10 @@ Int Forward-only pre-filter options:\n\
                << " tantan-threshold=" << TANTAN_MASK_THRESHOLD << "\n";
     if (maxModeOpt)
         std::cout << "# Max mode: forward-only pre-filter disabled\n";
+#ifdef FORWARD_ONLY_FILTER
+    else if (argc - optind > 1)
+        std::cout << "# Forward-only pre-filter E-value <= " << forward_only_evalue_opt << "\n";
+#endif
     if (maskOpt & 1)
         std::cout << "# Masking simple regions in profiles\n";
     if (argc - optind > 1) {
@@ -3951,7 +3958,7 @@ Int Forward-only pre-filter options:\n\
 
     findFinalSimilaritiesBatched(similarities, allRequests, profiles, charVec.data(), threadPool, threadScratches
 #ifdef FORWARD_ONLY_FILTER
-        , forward_only_evalue_opt, totSequenceLength
+        , forward_only_evalue_opt, totSequenceLength, maxModeOpt
 #endif
     );
 
