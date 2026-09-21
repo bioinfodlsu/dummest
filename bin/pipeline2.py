@@ -6,6 +6,18 @@ import tempfile
 import argparse
 import pybedtools
 
+_DISK_TMP_THRESHOLD = 2 * 1024**3  # 2 GiB
+
+
+def _tmp_base_dir(fa_file):
+    """Return None (= system /tmp) or '.' (CWD disk) based on fa size."""
+    try:
+        if os.path.getsize(fa_file) > _DISK_TMP_THRESHOLD:
+            return "."
+    except OSError:
+        pass
+    return None
+
 def main():
     parser = argparse.ArgumentParser(
         description="Pipeline2: HMM-guided genomic search via MMseqs2 + dummer",
@@ -32,21 +44,40 @@ def main():
                         help="Include seed annotations in FASTA headers (dummer runs with seed gating)")
     parser.add_argument("--dummer-bin", dest="dummer_bin", default=None,
                         help="Path to dummer binary (overrides default dummer)")
-    parser.add_argument("--prefilter-mode", type=int, default=None, choices=[3],
-                        help="MMseqs2 --prefilter-mode 3 (GPU combined ungapped+gapped). "
-                             "Seeds use only endpoint positions (point seeds).")
+    parser.add_argument("--prefilter-mode", type=int, default=1, choices=[1, 3],
+                        help="MMseqs2 prefilter mode: 1 = ungapped prefilter (applies "
+                             "--min-ungapped-score and --ungapped-pvalue), "
+                             "3 = GPU combined ungapped+gapped. "
+                             "Seeds use only endpoint positions (point seeds) in mode 3.")
     parser.add_argument("--no-gpu", action="store_true",
                         help="Run MMseqs2 on CPU only (passes --gpu 0 to createdb and search instead of --gpu 1). "
                              "Cannot be combined with --prefilter-mode 3, which requires GPU.")
-    parser.add_argument("--prefilter-pvalue", dest="prefilter_pvalue", type=float, default=0.1,
-                         help="MMseqs2 prefilter p-value (default: 0.1). "
+    parser.add_argument("--prefilter-pvalue", dest="prefilter_pvalue", type=float, default=0.02,
+                         help="MMseqs2 prefilter p-value (default: 0.02). "
                               "Passed as -e <nseq*6*pvalue> to 'mmseqs search'. "
                               "Ignored in --max mode, which skips MMseqs2.")
-    parser.add_argument("--prefilter-max-seqs", dest="prefilter_max_seqs", type=int, default=1000,
-                         help="MMseqs2 prefilter max seqs per protein family "
-                              "(per query profile) allowed to pass the prefilter (default: 1000). "
-                              "Passed as --max-seqs to 'mmseqs search'. "
+    parser.add_argument("--ungapped-pvalue", dest="ungapped_pvalue", type=float, default=0.02,
+                        help="Max per-pair ungapped p-value for the prefilter stage (default: 0.02). "
+                             "Passed as --ungapped-pvalue to 'mmseqs search' (takes effect with "
+                             "--prefilter-mode 1 or 3, which route through ungappedprefilter). "
+                             "Use 1.0 to disable p-value filtering (score floor only).")
+    parser.add_argument("--prefilter-max-seqs", dest="prefilter_max_seqs", type=int, default=2147483647,
+                         help="MMseqs2 prefilter max hits per protein family "
+                              "(per query profile) kept from the prefilter (default: 2147483647, i.e. keep all). "
+                              "Passed as --max-seqs to 'mmseqs ungappedprefilter'. "
                               "Ignored in --max mode, which skips MMseqs2.")
+    parser.add_argument("--ungapped-calib", dest="ungapped_calib", default=None,
+                         help="Path to sidecar cache for per-profile ungapped calibration "
+                              "(default: ~/.cache/dummer/ungappedcalib.tsv, shared across runs: "
+                              "rows are keyed by profile-content hash, so sharing is safe). "
+                              "Passed as --ungapped-calib to 'mmseqs search'. "
+                              "Ignored in --max mode, which skips MMseqs2.")
+    parser.add_argument("--ungapped-recalibrate", dest="ungapped_recalibrate", action="store_true",
+                         help="Ignore cache entries and recalibrate every profile "
+                              "(passed as --ungapped-recalibrate 1 to 'mmseqs search'). "
+                              "Ignored in --max mode, which skips MMseqs2.")
+    parser.add_argument("--mmseqs-bin", dest="mmseqs_bin", default=None,
+                         help="Path to mmseqs binary (overrides default mmseqs from PATH)")
     parser.add_argument("--insert1", type=float, default=None,
                         help="DUMMER 1-base insertion rate per base (default: dummer default 0.0171)")
     parser.add_argument("--insert2", type=float, default=None,
@@ -61,6 +92,8 @@ def main():
                         help="DUMMER background stop codon probability (default: dummer default 0.046875)")
     parser.add_argument("--tantan-threshold", dest="tantan_threshold", type=float, default=None,
                         help="DUMMER tantan masking threshold (default: dummer default 0.5)")
+    parser.add_argument("--evalue", "-e", dest="evalue", type=float, default=10,
+                        help="DUMMER E-value threshold (default: 10). Forwarded as both -e and -W to dummer.")
 
     args = parser.parse_args()
 
@@ -69,6 +102,8 @@ def main():
 
     if args.prefilter_pvalue is None or not args.prefilter_pvalue >= 0:
         parser.error("--prefilter-pvalue must be >= 0")
+    if args.ungapped_pvalue is None or not 0 <= args.ungapped_pvalue <= 1:
+        parser.error("--ungapped-pvalue must be in [0, 1]")
     if args.prefilter_max_seqs is None or args.prefilter_max_seqs < 1:
         parser.error("--prefilter-max-seqs must be >= 1")
     for _name in ("insert1", "insert2", "delete1", "delete2",
@@ -78,6 +113,8 @@ def main():
             parser.error(f"--{_name.replace('_', '-')} must be in [0, 1)")
     if args.tantan_threshold is not None and not 0 <= args.tantan_threshold <= 1:
         parser.error("--tantan-threshold must be in [0, 1]")
+    if args.evalue is None or not args.evalue >= 0:
+        parser.error("--evalue must be >= 0")
 
     dummer_extra_args = []
     if args.insert1 is not None:
@@ -99,9 +136,18 @@ def main():
     msa_file = args.msa_file
     fa_file = args.fa_file
     cpus = args.cpus
+    if args.ungapped_calib is None:
+        calib_dir = os.path.join(os.path.expanduser("~"), ".cache", "dummer")
+        os.makedirs(calib_dir, exist_ok=True)
+        args.ungapped_calib = os.path.join(calib_dir, "ungappedcalib.tsv")
+
+    tmp_parent = _tmp_base_dir(fa_file)
+    if tmp_parent:
+        print("# Genome >2GB, using CWD for temp instead of /tmp")
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
     dummer_exec = args.dummer_bin or os.path.join(script_dir, "../cmake-build-release/dummer")
+    mmseqs_exec = args.mmseqs_bin or "mmseqs"
 
     # ---------------------------------------------------------
     # 1. Parse sequences and HMMs
@@ -146,7 +192,8 @@ def main():
     # --max mode: skip mmseqs2, run dummer directly on all profiles x contigs
     # ---------------------------------------------------------
     if args.max:
-        merged_fa_path = os.path.join(tempfile.gettempdir(), "dummer_max.fa")
+        _base = tmp_parent or tempfile.gettempdir()
+        merged_fa_path = os.path.join(_base, f"dummer_max.{os.getpid()}.fa")
         trans = str.maketrans("ACGTacgt", "TGCAtgca")
 
         with open(merged_fa_path, "w") as fout:
@@ -164,7 +211,7 @@ def main():
         if not args.skip_dummer:
             try:
                 subprocess.run(
-                    [dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '--max', '-N', str(tot_seq_len)]
+                    [dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '--max', '-e', str(args.evalue), '-N', str(tot_seq_len)]
                     + dummer_extra_args,
                     env=os.environ.copy(), check=True,
                 )
@@ -181,7 +228,7 @@ def main():
 
         return
 
-    with tempfile.TemporaryDirectory(prefix="mmseqs_tmp_", delete=True) as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="mmseqs_tmp_", dir=tmp_parent, delete=True) as tmpdir:
         print(f"# Temporary directory is: {tmpdir}")
 
         # ---------------------------------------------------------
@@ -198,17 +245,30 @@ def main():
             print(f"# Using existing target_db_pad: {target_db_pad}")
         else:
             prot_fa_path = os.path.join(tmpdir, "translated_6frame.pfa")
-            subprocess.run([
-                "seqkit", "translate", "-f", "6", "-F",
-                "--threads", cpus,
-                "-o", prot_fa_path, fa_file
-            ], check=True)
+            # Parity with step3-dummer-precompute.sh:
+            #   seqkit seq -m 3 <fa> | seqkit translate -f 6 -F
+            # Short (<3nt) DNAs are auto-removed by the -m 3 pre-filter so
+            # per-run and prebuilt DBs stay identical; empty protein frames
+            # from >=3nt DNAs are intentionally retained.
+            print("# 6-frame translate with -m 3 pre-filter (parity with step3-dummer-precompute.sh)")
+            p1 = subprocess.Popen(["seqkit", "seq", "-m", "3", fa_file],
+                                  stdout=subprocess.PIPE)
+            p2 = subprocess.Popen(["seqkit", "translate", "-f", "6", "-F",
+                                   "--threads", str(cpus),
+                                   "-o", prot_fa_path],
+                                  stdin=p1.stdout)
+            p1.stdout.close()
+            ret2 = p2.wait()
+            ret1 = p1.wait()
+            if ret1 != 0 or ret2 != 0:
+                raise subprocess.CalledProcessError(ret2 if ret2 != 0 else ret1,
+                                                    "seqkit seq -m 3 | seqkit translate -f 6 -F")
 
             target_db_pad = os.path.join(db_dir, "targetDB_pad")
             gpu_flag = "0" if args.no_gpu else "1"
             if args.no_gpu:
                 print("# Running MMseqs2 in CPU-only mode (--gpu 0)")
-            subprocess.run(["mmseqs", "createdb", prot_fa_path, target_db_pad, "--gpu", gpu_flag, "--threads", cpus], check=True, stdout=subprocess.DEVNULL)
+            subprocess.run([mmseqs_exec, "createdb", prot_fa_path, target_db_pad, "--gpu", gpu_flag, "--threads", cpus], check=True, stdout=subprocess.DEVNULL)
 
         if args.query_db:
             query_db = args.query_db
@@ -216,35 +276,36 @@ def main():
         else:
             query_db = os.path.join(db_dir, "queryDB")
             msa_db = os.path.join(db_dir, "msa_db")
-            subprocess.run(["mmseqs", "convertmsa", msa_file, msa_db, "--identifier-field", "0"], check=True, stdout=subprocess.DEVNULL)
-            subprocess.run(["mmseqs", "msa2profile", msa_db, query_db, "--threads", cpus], check=True, stdout=subprocess.DEVNULL)
+            subprocess.run([mmseqs_exec, "convertmsa", msa_file, msa_db, "--identifier-field", "0"], check=True, stdout=subprocess.DEVNULL)
+            subprocess.run([mmseqs_exec, "msa2profile", msa_db, query_db, "--threads", cpus], check=True, stdout=subprocess.DEVNULL)
 
+        # Gapped search (Smith-Waterman) on prefilter survivors. With
+        # --prefilter-mode 1/3 the prefilter stage is ungappedprefilter, where
+        # --min-ungapped-score and --ungapped-pvalue filter hits before SW.
+        # Final significance is the SW E-value (-e); dummer re-scores windows.
         mmseqs_cmd = [
-            "mmseqs", "search", query_db, target_db_pad, ali_file, tmpdir,
+            mmseqs_exec, "search", query_db, target_db_pad, ali_file, tmpdir,
             "--gpu", "0" if args.no_gpu else "1",
             "--threads", cpus,
             "-e", str(len(dna_seqs) * 6 * args.prefilter_pvalue), # p-value (default 0.01)
             "--max-seqs", str(args.prefilter_max_seqs),
+            "--prefilter-mode", str(args.prefilter_mode),
+            "--ungapped-pvalue", str(args.ungapped_pvalue),
+            "--ungapped-calib", args.ungapped_calib,
             "--alignment-mode", "2",
         ]
-        if args.prefilter_mode is not None:
-            mmseqs_cmd.extend(["--prefilter-mode", str(args.prefilter_mode)])
+        if args.prefilter_mode == 3:
             mmseqs_cmd[mmseqs_cmd.index("--alignment-mode") + 1] = "1"
         if args.no_gpu:
             mmseqs_cmd.extend(["--spaced-kmer-mode", "0"])
             mmseqs_cmd.extend(["-s", "7.5"])
-
-        # mmseqs_cmd = [
-        #     "mmseqs", "search", query_db, target_db_pad, ali_file, tmpdir,
-        #     "--threads", cpus,
-        #     #"-e", "10000",
-        #     "-e", "10000",
-        #     "-s", "10.5",
-        #     "--alignment-mode", "1",
-        # ]
+        if args.ungapped_recalibrate:
+            mmseqs_cmd.extend(["--ungapped-recalibrate", "1"])
+        print(f"# Ungapped calibration cache: {args.ungapped_calib}"
+              + (" (recalibrating)" if args.ungapped_recalibrate else ""))
 
         subprocess.run(mmseqs_cmd, check=True)
-        subprocess.run(["mmseqs", "convertalis", query_db, target_db_pad, ali_file, tmp_file, "--threads", cpus], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run([mmseqs_exec, "convertalis", query_db, target_db_pad, ali_file, tmp_file, "--threads", cpus], check=True, stdout=subprocess.DEVNULL)
 
         # ---------------------------------------------------------
         # 4. Map Amino Acid Hits -> Genomic DNA Windows
@@ -281,10 +342,12 @@ def main():
         #     Window — [start-1, end)  (0-indexed, half-open)
         #     Overlap: gen_e > (start-1) AND gen_s < end
         #
+        # Seeds use full SW alignment intervals below (--seeds).
         hits_by_window = {}
 
         def parse_mmseqs_to_intervals(filepath):
-            for line in open(filepath):
+            malformed = 0
+            for lineno, line in enumerate(open(filepath), 1):
                 if line.startswith("#"):
                     continue
 
@@ -294,10 +357,18 @@ def main():
 
                 query_acc = fields[0]
                 target_full = fields[1]
-                q_start = int(fields[6])
-                q_end   = int(fields[7])
-                t_start = int(fields[8])
-                t_end = int(fields[9])
+                try:
+                    q_start = int(fields[6])
+                    q_end   = int(fields[7])
+                    t_start = int(fields[8])
+                    t_end = int(fields[9])
+                except ValueError:
+                    malformed += 1
+                    if malformed <= 5:
+                        print(f"# WARNING: skipping convertalis line {lineno} "
+                              f"with non-integer coords: {line.strip()!r}",
+                              file=sys.stderr)
+                    continue
                 hmm_len = hmm_lens.get(query_acc, 0)
                 if args.prefilter_mode == 3:
                     p_pos = max(1, t_end - (hmm_len // 2))
@@ -305,10 +376,22 @@ def main():
                     p_pos = max(1, (t_start + t_end) // 2)
                 e_value = fields[10]
                 bitscore = fields[11]
-                
+
                 *target_parts, frame_str = target_full.rsplit('_', 1)
                 target_base = '_'.join(target_parts)
-                frame_val = int(frame_str.split('=')[1])
+                try:
+                    frame_val = int(frame_str.split('=')[1])
+                except (IndexError, ValueError):
+                    # Run-A hardening: log-and-skip a malformed convertalis
+                    # target instead of crashing the hour-long run. The
+                    # offender row is preserved via the failure copy below.
+                    malformed += 1
+                    if malformed <= 5:
+                        print(f"# WARNING: skipping convertalis line {lineno} "
+                              f"with malformed target (expected *_frame=±N): "
+                              f"{target_full!r} :: {line.strip()!r}",
+                              file=sys.stderr)
+                    continue
                 strand, frame = ('F', frame_val) if frame_val > 0 else ('R', abs(frame_val))
 
                 if args.prefilter_mode == 3:
@@ -331,7 +414,7 @@ def main():
                     })
 
                 L = dna_lens.get(target_base, 0)
-                if L == 0: 
+                if L == 0:
                     continue
                 pad = 3 * hmm_lens.get(query_acc, 0)
 
@@ -344,18 +427,37 @@ def main():
                     yield pybedtools.Interval(fake_chrom, start, end, query_acc, bitscore, '+')
                 else:
                     start = max(0, L - base_pos - 1 - pad)
-                    end   = min(L, L - base_pos + pad)
+                    end = min(L, L - base_pos + pad)
                     fake_chrom = f"{target_base}|{query_acc}|-"
                     yield pybedtools.Interval(fake_chrom, start, end, query_acc, bitscore, '-')
+
+            if malformed:
+                print(f"# WARNING: skipped {malformed} malformed convertalis "
+                      f"row(s) (see first 5 above)", file=sys.stderr)
 
         def unpack_intervals(feature):
             real_chrom, query_acc, strand = feature.chrom.split('|')
             return pybedtools.Interval(real_chrom, feature.start, feature.end, query_acc, ".", strand)
 
-        merged_bed = pybedtools.BedTool(parse_mmseqs_to_intervals(tmp_file)) \
-            .sort() \
-            .merge() \
-            .each(unpack_intervals)
+        try:
+            merged_bed = pybedtools.BedTool(parse_mmseqs_to_intervals(tmp_file)) \
+                .sort() \
+                .merge() \
+                .each(unpack_intervals)
+        except Exception:
+            # Preserve the offender for Run-A forensics: tmpdir is deleted
+            # on exit, so copy the convertalis output to CWD before re-raise.
+            import shutil
+            rescue = os.path.join(os.getcwd(),
+                                  f"convertalis.{os.path.basename(fa_file)}.tmp.failed")
+            try:
+                shutil.copy2(tmp_file, rescue)
+                print(f"# convertalis output preserved at: {rescue}",
+                      file=sys.stderr)
+            except OSError as _e:
+                print(f"# WARNING: could not preserve convertalis output: {_e}",
+                      file=sys.stderr)
+            raise
 
         # ---------------------------------------------------------
         # 5. Extract Final Genomic FASTA (Bedtools)
@@ -434,7 +536,7 @@ def main():
             #custom_env["ASAN_OPTIONS"] = "detect_container_overflow=1:strict_memcmp=1"
             
             try:
-                subprocess.run([dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-W', '0.1' if not args.max else '10', '-N', str(tot_seq_len)] + dummer_extra_args, env=custom_env, check=True)
+                subprocess.run([dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-e', str(args.evalue), '-W', str(args.evalue), '-N', str(tot_seq_len)] + dummer_extra_args, env=custom_env, check=True)
             except subprocess.CalledProcessError as e:
                 print(f"Error: dummer encountered an issue (Exit status: {e.returncode})")
                 sys.exit(1)
