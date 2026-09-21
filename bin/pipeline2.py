@@ -44,22 +44,18 @@ def main():
                         help="Include seed annotations in FASTA headers (dummer runs with seed gating)")
     parser.add_argument("--dummer-bin", dest="dummer_bin", default=None,
                         help="Path to dummer binary (overrides default dummer)")
-    parser.add_argument("--prefilter-mode", type=int, default=1, choices=[1, 3],
-                        help="MMseqs2 prefilter mode: 1 = ungapped prefilter (applies "
-                             "--min-ungapped-score and --ungapped-pvalue), "
-                             "3 = GPU combined ungapped+gapped. "
-                             "Seeds use only endpoint positions (point seeds) in mode 3.")
+    parser.add_argument("--prefilter-mode", type=int, default=1, choices=[1],
+                        help="MMseqs2 prefilter mode (currently only 1 = ungapped "
+                             "prefilter, applies --ungapped-pvalue).")
     parser.add_argument("--no-gpu", action="store_true",
-                        help="Run MMseqs2 on CPU only (passes --gpu 0 to createdb and search instead of --gpu 1). "
-                             "Cannot be combined with --prefilter-mode 3, which requires GPU.")
+                        help="Run MMseqs2 on CPU only (passes --gpu 0 to createdb and search instead of --gpu 1).")
     parser.add_argument("--prefilter-pvalue", dest="prefilter_pvalue", type=float, default=0.02,
                          help="MMseqs2 prefilter p-value (default: 0.02). "
                               "Passed as -e <nseq*6*pvalue> to 'mmseqs search'. "
                               "Ignored in --max mode, which skips MMseqs2.")
     parser.add_argument("--ungapped-pvalue", dest="ungapped_pvalue", type=float, default=0.02,
                         help="Max per-pair ungapped p-value for the prefilter stage (default: 0.02). "
-                             "Passed as --ungapped-pvalue to 'mmseqs search' (takes effect with "
-                             "--prefilter-mode 1 or 3, which route through ungappedprefilter). "
+                             "Passed as --ungapped-pvalue to 'mmseqs search'. "
                              "Use 1.0 to disable p-value filtering (score floor only).")
     parser.add_argument("--prefilter-max-seqs", dest="prefilter_max_seqs", type=int, default=2147483647,
                          help="MMseqs2 prefilter max hits per protein family "
@@ -96,9 +92,6 @@ def main():
                         help="DUMMER E-value threshold (default: 10). Forwarded as both -e and -W to dummer.")
 
     args = parser.parse_args()
-
-    if args.no_gpu and args.prefilter_mode == 3:
-        parser.error("--prefilter-mode 3 requires GPU; remove --no-gpu or drop --prefilter-mode 3")
 
     if args.prefilter_pvalue is None or not args.prefilter_pvalue >= 0:
         parser.error("--prefilter-pvalue must be >= 0")
@@ -279,9 +272,9 @@ def main():
             subprocess.run([mmseqs_exec, "convertmsa", msa_file, msa_db, "--identifier-field", "0"], check=True, stdout=subprocess.DEVNULL)
             subprocess.run([mmseqs_exec, "msa2profile", msa_db, query_db, "--threads", cpus], check=True, stdout=subprocess.DEVNULL)
 
-        # Gapped search (Smith-Waterman) on prefilter survivors. With
-        # --prefilter-mode 1/3 the prefilter stage is ungappedprefilter, where
-        # --min-ungapped-score and --ungapped-pvalue filter hits before SW.
+        # Gapped search (Smith-Waterman) on prefilter survivors. The
+        # prefilter stage is ungappedprefilter, where --ungapped-pvalue
+        # filters hits before SW.
         # Final significance is the SW E-value (-e); dummer re-scores windows.
         mmseqs_cmd = [
             mmseqs_exec, "search", query_db, target_db_pad, ali_file, tmpdir,
@@ -294,8 +287,6 @@ def main():
             "--ungapped-calib", args.ungapped_calib,
             "--alignment-mode", "2",
         ]
-        if args.prefilter_mode == 3:
-            mmseqs_cmd[mmseqs_cmd.index("--alignment-mode") + 1] = "1"
         if args.no_gpu:
             mmseqs_cmd.extend(["--spaced-kmer-mode", "0"])
             mmseqs_cmd.extend(["-s", "7.5"])
@@ -369,11 +360,7 @@ def main():
                               f"with non-integer coords: {line.strip()!r}",
                               file=sys.stderr)
                     continue
-                hmm_len = hmm_lens.get(query_acc, 0)
-                if args.prefilter_mode == 3:
-                    p_pos = max(1, t_end - (hmm_len // 2))
-                else:
-                    p_pos = max(1, (t_start + t_end) // 2)
+                p_pos = max(1, (t_start + t_end) // 2)
                 e_value = fields[10]
                 bitscore = fields[11]
 
@@ -394,17 +381,7 @@ def main():
                     continue
                 strand, frame = ('F', frame_val) if frame_val > 0 else ('R', abs(frame_val))
 
-                if args.prefilter_mode == 3:
-                    hits_by_window.setdefault((target_base, query_acc, strand), []).append({
-                        'q_start': q_end,
-                        'q_end':   q_end,
-                        't_start': t_end,
-                        't_end':   t_end,
-                        'frame':   frame,
-                        'bitscore': float(bitscore),
-                    })
-                else:
-                    hits_by_window.setdefault((target_base, query_acc, strand), []).append({
+                hits_by_window.setdefault((target_base, query_acc, strand), []).append({
                         'q_start': q_start,
                         'q_end':   q_end,
                         't_start': t_start,
