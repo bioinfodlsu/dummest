@@ -40,8 +40,6 @@ def main():
                         help="Save debug FASTA to this path (persistent copy)")
     parser.add_argument("--max", action="store_true",
                         help="Max sensitivity: disable heuristic windowing (pad=full contig)")
-    parser.add_argument("--seeds", action="store_true",
-                        help="Include seed annotations in FASTA headers (dummer runs with seed gating)")
     parser.add_argument("--dummer-bin", dest="dummer_bin", default=None,
                         help="Path to dummer binary (overrides default dummer)")
     parser.add_argument("--prefilter-mode", type=int, default=1, choices=[1],
@@ -317,25 +315,6 @@ def main():
         #       protein position p in frame N ↔ 1st nt of codon at original position:
         #         L - N - 3*p + 3   (0-indexed, inclusive)
         #
-        #   Seed format "seed=prof_s,dna_s,prof_e,dna_e" (semicolons between seeds):
-        #     All values are 0-indexed inclusive.
-        #     prof_s, prof_e — positions in the HMM profile (query)
-        #     dna_s, dna_e   — positions within the EXTRACTED FASTA window
-        #       Forward strand: dna position 0 = genome position (start-1), left-to-right
-        #       Reverse strand: bedtools getfasta -s produces reverse-complemented FASTA;
-        #         dna position 0 = genome position (end-1), right-to-left
-        #     dna_s = first  nucleotide of the codon at prof_s
-        #     dna_e = first  nucleotide of the codon at prof_e
-        #
-        #   Genomic overlap check (0-indexed half-open genome intervals):
-        #     gen_s  — 0-indexed inclusive start of alignment in genome
-        #     gen_e  — 0-indexed exclusive end   of alignment in genome
-        #     Window — [start-1, end)  (0-indexed, half-open)
-        #     Overlap: gen_e > (start-1) AND gen_s < end
-        #
-        # Seeds use full SW alignment intervals below (--seeds).
-        hits_by_window = {}
-
         def parse_mmseqs_to_intervals(filepath):
             malformed = 0
             for lineno, line in enumerate(open(filepath), 1):
@@ -380,15 +359,6 @@ def main():
                               file=sys.stderr)
                     continue
                 strand, frame = ('F', frame_val) if frame_val > 0 else ('R', abs(frame_val))
-
-                hits_by_window.setdefault((target_base, query_acc, strand), []).append({
-                        'q_start': q_start,
-                        'q_end':   q_end,
-                        't_start': t_start,
-                        't_end':   t_end,
-                        'frame':   frame,
-                        'bitscore': float(bitscore),
-                    })
 
                 L = dna_lens.get(target_base, 0)
                 if L == 0:
@@ -460,43 +430,7 @@ def main():
                     start, end = int(start_str), int(end_str)
                     strand_label = "plus_strand" if strand_sign == '+' else "minus_strand_revcomp"
 
-                    seed_str = ""
-                    if args.seeds:
-                        strand_key = 'F' if strand_sign == '+' else 'R'
-                        hits = hits_by_window.get((chrom, query, strand_key), [])
-                        if hits:
-                            seeds = []
-                            for h in hits:
-                                frame   = h['frame']
-                                t_start = h['t_start']
-                                t_end   = h['t_end']
-                                prof_s  = h['q_start'] - 1
-                                prof_e  = h['q_end']   - 1
-                                L = dna_lens.get(chrom, 0)
-                                if L > 0:
-                                    win_start = start - 1
-                                    win_end   = end
-                                    if strand_sign == '+':
-                                        gen_s = (frame - 1) + 3 * (t_start - 1)
-                                        gen_e = (frame - 1) + 3 * (t_end   - 1) + 3
-                                        if gen_e <= win_start or gen_s >= win_end:
-                                            continue
-                                        dna_s = gen_s - win_start
-                                        dna_e = gen_e - 3 - win_start
-                                    else:
-                                        gen_s = L - frame - 3 * t_end + 1
-                                        gen_e = L - frame - 3 * t_start + 4
-                                        if gen_e <= win_start or gen_s >= win_end:
-                                            continue
-                                        dna_s = (end - 1) - (L - frame - 3 * t_start + 3)
-                                        dna_e = (end - 1) - (L - frame - 3 * t_end   + 3)
-                                    win_size = end - start + 1
-                                    dna_s = max(0, min(dna_s, win_size - 1))
-                                    dna_e = max(0, min(dna_e, win_size - 1))
-                                    seeds.append(f"{prof_s},{dna_s},{prof_e},{dna_e}")
-                            seed_str = f" seed={';'.join(seeds)}"
-
-                    fout.write(f">{chrom}/{start+1}-{end} length={dna_lens.get(chrom, 0)} profile={query} {strand_label}{seed_str}\n")
+                    fout.write(f">{chrom}/{start+1}-{end} length={dna_lens.get(chrom, 0)} profile={query} {strand_label}\n")
                 else:
                     fout.write(line)
 
