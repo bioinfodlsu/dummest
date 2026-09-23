@@ -88,6 +88,9 @@ def main():
                         help="DUMMER tantan masking threshold (default: dummer default 0.5)")
     parser.add_argument("--evalue", "-e", dest="evalue", type=float, default=10,
                         help="DUMMER E-value threshold (default: 10). Forwarded as both -e and -W to dummer.")
+    parser.add_argument("--batch", dest="batch", type=int, default=None,
+                        help="DUMMER stream chunk size in sequences (default: threads * 10000). "
+                             "Small values force multi-chunk streaming.")
 
     args = parser.parse_args()
 
@@ -106,8 +109,12 @@ def main():
         parser.error("--tantan-threshold must be in [0, 1]")
     if args.evalue is None or not args.evalue >= 0:
         parser.error("--evalue must be >= 0")
+    if args.batch is not None and args.batch < 1:
+        parser.error("--batch must be >= 1")
 
     dummer_extra_args = []
+    if args.batch is not None:
+        dummer_extra_args += ["--batch", str(args.batch)]
     if args.insert1 is not None:
         dummer_extra_args += ["--insert1", str(args.insert1)]
     if args.insert2 is not None:
@@ -137,7 +144,7 @@ def main():
         print("# Genome >2GB, using CWD for temp instead of /tmp")
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    dummer_exec = args.dummer_bin or os.path.join(script_dir, "../cmake-build-release/dummer")
+    dummer_exec = args.dummer_bin or os.path.join(script_dir, "../bin/dummerl")
     mmseqs_exec = args.mmseqs_bin or "mmseqs"
 
     # ---------------------------------------------------------

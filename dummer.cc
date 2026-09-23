@@ -85,7 +85,8 @@ enum {
     OPT_STOP_CODE,
     OPT_BG_STOP_CODE,
     OPT_TANTAN_CODE,
-    OPT_MAX_CODE
+    OPT_MAX_CODE,
+    OPT_BATCH_CODE
 };
 
 #ifdef DOUBLE
@@ -1953,12 +1954,13 @@ void findFinalSimilarities(std::vector<FinalSimilarity> &similarities, std::arra
 
 }
 
-void findFinalSimilaritiesBatched(std::vector<FinalSimilarity> &similarities,
+void findFinalSimilaritiesBatched(const std::vector<Sequence> &sequences,
                                   std::vector<std::vector<SequenceRequest>> &allRequests,
                                   const std::vector<Profile> &profiles, const char *charVec,
-                                  ThreadPool &threadPool, std::vector<DPScratch> &threadScratches
+                                  ThreadPool &threadPool, std::vector<DPScratch> &threadScratches,
+                                  double evalueOpt, size_t totSequenceLength
 #ifdef FORWARD_ONLY_FILTER
-                                  , double forward_only_evalue, double totSequenceLength, bool skipPrefilter
+                                  , double forward_only_evalue, bool skipPrefilter
 #endif
                                   ) {
 #ifdef FORWARD_ONLY_FILTER
@@ -2074,7 +2076,6 @@ void findFinalSimilaritiesBatched(std::vector<FinalSimilarity> &similarities,
 
     if (jobs.empty()) return;
 
-    std::vector<std::vector<FinalSimilarity>> jobSimilarities(jobs.size());
     std::atomic<size_t> completedJobs(0);
     std::mutex mtx;
     std::condition_variable cv;
@@ -2089,9 +2090,25 @@ void findFinalSimilaritiesBatched(std::vector<FinalSimilarity> &similarities,
                 curBatch[k] = requests[job.startRequestIdx + k];
             }
 
-            findFinalSimilarities(jobSimilarities[jobIdx], curBatch,
+            std::vector<FinalSimilarity> jobSimilarities;
+            findFinalSimilarities(jobSimilarities, curBatch,
                                   profiles[job.profileIdx], job.profileIdx,
                                   charVec, threadScratch, job.activeCount);
+
+            // Print immediately (unordered): nothing downstream depends on
+            // record order, and each hit's alignment is freed right away.
+            {
+                std::lock_guard<std::mutex> lock(g_cout_mutex);
+                for (const auto &sim : jobSimilarities) {
+                    const Profile &p = profiles[sim.profileNum];
+                    const Sequence &s = sequences[sim.strandNum / 2];
+                    double evalue = p.gumbelKmidAnchored * totSequenceLength *
+                                    std::exp(-p.lambda * sim.logProbRatio);
+                    if (evalueOpt > 0 && evalue > evalueOpt)
+                        continue;
+                    printSimilarity(charVec, p, s, sim, evalue);
+                }
+            }
 
             if (++completedJobs == jobs.size()) {
                 std::lock_guard<std::mutex> lock(mtx);
@@ -2103,15 +2120,6 @@ void findFinalSimilaritiesBatched(std::vector<FinalSimilarity> &similarities,
     if (!jobs.empty()) {
         std::unique_lock<std::mutex> lock(mtx);
         cv.wait(lock, [&]{ return completedJobs == jobs.size(); });
-    }
-
-    size_t totalSimilarities = 0;
-    for (const auto &jobSims : jobSimilarities) {
-        totalSimilarities += jobSims.size();
-    }
-    similarities.reserve(totalSimilarities);
-    for (const auto &jobSims : jobSimilarities) {
-        similarities.insert(similarities.end(), jobSims.begin(), jobSims.end());
     }
 }
 
@@ -3121,6 +3129,7 @@ int main(int argc, char *argv[]) {
     int randomSeqNum = OPT_t;
     int randomSeqLen = OPT_l;
     int border = OPT_b;
+    int batchSequencesOpt = 0; // 0 => threads * 10000
     int backgroundProbsType = 'G';
     char* scoresFilename = nullptr;
     int numThreadsOpt = std::thread::hardware_concurrency();
@@ -3153,6 +3162,8 @@ Options for random sequences:\n\
   -t T, --trials T  generate this many random sequences (default: " STR(OPT_t) ")\n\
   -l L, --length L  length of each random sequence (default: " STR(OPT_l) ")\n\
      -b B, --border B  add this size border to each random sequence (default: " STR(OPT_b) ")\n\
+  --batch N         stream sequences in chunks of N, printing as each is done\n\
+                    (default: threads * 10000, i.e. one chunk for small inputs)\n\
    -S F, --scores-file F  write adjusted bit scores of random sequences to file F\n\
                               and exit (skips sequence search)\n\
 \n\
@@ -3213,6 +3224,7 @@ Forward-only pre-filter options:\n\
                                     {"bg-stop-codon-prob", required_argument, 0, OPT_BG_STOP_CODE},
                                     {"tantan-threshold", required_argument, 0, OPT_TANTAN_CODE},
                                     {"max", no_argument, 0, OPT_MAX_CODE},
+                                    {"batch", required_argument, 0, OPT_BATCH_CODE},
 #ifdef FORWARD_ONLY_FILTER
                                      {"forward-only-evalue", required_argument, 0, 'W'},
 #endif
@@ -3342,6 +3354,11 @@ Forward-only pre-filter options:\n\
 #endif
         case OPT_MAX_CODE:
             maxModeOpt = true;
+            break;
+        case OPT_BATCH_CODE:
+            batchSequencesOpt = intFromText(optarg);
+            if (batchSequencesOpt < 1)
+                return badOpt();
             break;
         case '?':
             std::cerr << help;
@@ -3512,33 +3529,108 @@ Forward-only pre-filter options:\n\
 #endif
 
     charVec.resize(seqIdx);
-    std::vector<Sequence> sequences;
-    std::vector<FinalSimilarity> similarities;
+    const size_t nameBase = seqIdx; // profile/consensus data; names are chunk-scoped
     size_t totSequenceLength = 0;
     if (totSequenceLengthOverride >= 0)
         totSequenceLength = (size_t)totSequenceLengthOverride;
 
+    // ---------------------------------------------------------
+    // Stream the sequences in chunks of --batch so only that many
+    // are resident at once. Calibration has already run; jobs are
+    // size-sorted within each chunk (no global sort across chunks).
+    // ---------------------------------------------------------
     std::ifstream file;
-    std::istream &in = openFile(file, argv[optind + 1]);
-    if (!file)
-        return 1;
+    std::istream *in = nullptr;
+    std::filesystem::path spoolPath;
+    bool needTotalScan = (totSequenceLengthOverride < 0);
+    if (isDash(argv[optind + 1]) && needTotalScan) {
+        // stdin is not seekable: spool it so the total-length pass can
+        // re-read it before streaming.
+        std::error_code ec;
+        spoolPath = std::filesystem::temp_directory_path(ec) /
+                    ("dummer-stdin-" + std::to_string(std::random_device{}()) + ".fa");
+        {
+            std::ofstream out(spoolPath, std::ios::binary);
+            out << std::cin.rdbuf();
+        }
+        file.open(spoolPath, std::ios::binary);
+        if (!file)
+            return 1;
+        in = &file;
+    } else if (isDash(argv[optind + 1])) {
+        in = &std::cin;
+    } else {
+        file.open(argv[optind + 1]);
+        if (!file) {
+            std::cerr << "can't open file: " << argv[optind + 1] << "\n";
+            return 1;
+        }
+        in = &file;
+    }
+
+    if (needTotalScan) {
+        // Pass 0: total sequence length, needed by the forward-only
+        // pre-filter before any chunk is scored.
+        Sequence scanSeq;
+        Contig scanContig = {0, 0};
+        std::vector<char> scanVec;
+        while (readContig(*in, scanSeq, scanContig, scanVec, charToNumberIUPAC)) {
+            if (scanContig.length == 0)
+                continue;
+            totSequenceLength += scanContig.length;
+            if (strandOpt == 2)
+                totSequenceLength += scanContig.length;
+            scanVec.clear();
+        }
+        if (in != &file)
+            return err("cannot stream non-seekable input without -N");
+        file.clear();
+        file.seekg(0);
+    }
+
+    std::cout << "# Total sequence length: " << totSequenceLength << "\n";
+    std::cout.precision(3);
+
+    int batchSequences = (batchSequencesOpt > 0)
+                             ? batchSequencesOpt
+                             : (int)((long)numThreadsOpt * 10000);
+
+    std::vector<Sequence> sequences;
+    std::vector<std::vector<SequenceRequest>> allRequests(numOfProfiles);
     Sequence sequence;
     Contig contig = {0, 0};
-    std::vector<std::vector<SequenceRequest>> allRequests(numOfProfiles);
-    while (readContig(in, sequence, contig, charVec, charToNumberIUPAC)) {
-        if (contig.length == 0) {
-            sequences.push_back(sequence);
-            continue;
-        }
+    // Running total used for the per-sequence score gate. With -N this is the
+    // fixed override (as before); otherwise it accumulates in read order,
+    // preserving the historic running-partial-sum behaviour.
+    size_t minProbRatioTotal = (totSequenceLengthOverride >= 0) ? totSequenceLength : 0;
+
+    auto flushChunk = [&]() {
+        if (sequences.empty())
+            return;
+        findFinalSimilaritiesBatched(sequences, allRequests, profiles, charVec.data(),
+                                     threadPool, threadScratches, evalueOpt, totSequenceLength
+#ifdef FORWARD_ONLY_FILTER
+                                     , forward_only_evalue_opt, maxModeOpt
+#endif
+        );
+        sequences.clear();
+        for (auto &r : allRequests)
+            r.clear();
+        charVec.resize(nameBase);
+    };
+
+    while (readContig(*in, sequence, contig, charVec, charToNumberIUPAC)) {
+        if (contig.length == 0)
+            continue; // delimiter between records; metadata pushed below
         seqIdx = charVec.size() - contig.length;
         size_t maskedSeqIdx = (maskOpt & 2) ? charVec.size() : seqIdx;
         // The algorithms need one arbitrary letter past the end
         // Then round up to a multiple of the SIMD length
         charVec.resize(maskedSeqIdx + simdRoundUp(contig.length + 1));
         if (totSequenceLengthOverride < 0) {
-            totSequenceLength += contig.length;
+            minProbRatioTotal += contig.length;
             if (strandOpt == 2)
-                totSequenceLength += contig.length;
+                minProbRatioTotal += contig.length;
         }
         char *seq = &charVec[seqIdx];
         for (int s = 0; s < 2; ++s) {
@@ -3559,7 +3651,7 @@ Forward-only pre-filter options:\n\
 #endif
                         Float minProbRatio =
                             (evalueOpt > 0)
-                                ? (std::pow(p.gumbelKmidAnchored * totSequenceLength / evalueOpt,
+                                ? (std::pow(p.gumbelKmidAnchored * minProbRatioTotal / evalueOpt,
                                             1.0 / 1.0 /* p.lambda */))
                                 : -1;
                         if (verbosity > 1)
@@ -3572,31 +3664,18 @@ Forward-only pre-filter options:\n\
                 }
             }
         }
+        sequences.push_back(sequence);
         charVec.resize(seqIdx);
+
+        if ((int)sequences.size() >= batchSequences)
+            flushChunk();
     }
 
-    findFinalSimilaritiesBatched(similarities, allRequests, profiles, charVec.data(), threadPool, threadScratches
-#ifdef FORWARD_ONLY_FILTER
-        , forward_only_evalue_opt, totSequenceLength, maxModeOpt
-#endif
-    );
+    flushChunk();
 
-    std::cout << "# Total sequence length: " << totSequenceLength << "\n";
-
-    std::cout.precision(3);
-    for (size_t i = 0; i < similarities.size(); ++i) {
-        Profile p = profiles[similarities[i].profileNum];
-        Sequence s = sequences[similarities[i].strandNum / 2];
-        double k = (evalueOpt > 0) ? p.gumbelKmidAnchored
-                   : (i % 3 == 0)  ? p.gumbelKendAnchored
-                   : (i % 3 == 1)  ? p.gumbelKbegAnchored
-                                   : p.gumbelKmidAnchored;
-        double evalue = k * totSequenceLength * std::exp(-p.lambda * similarities[i].logProbRatio);
-        if (evalueOpt <= 0 && i % 3 == 0)
-            std::cout << "\n";
-        if (evalueOpt > 0 && evalue > evalueOpt)
-            continue;
-        printSimilarity(charVec.data(), p, s, similarities[i], evalue);
+    if (!spoolPath.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(spoolPath, ec);
     }
 
     return 0;

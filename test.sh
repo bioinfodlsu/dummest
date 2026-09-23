@@ -1,1 +1,1 @@
-time python3 bin/pipeline2.py MET-test.hmm MET.msa MET-target.fa 1 --max
+time python3 bin/pipeline2.py MET-test.hmm MET.msa MET-target.fa 16 --max --batch 1

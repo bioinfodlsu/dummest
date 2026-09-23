@@ -139,19 +139,19 @@ Other supported pipeline options include:
 
 The repository's `test.sh` provides a small intended-use example:
 
-    time python3 bin/pipeline2.py MET-test.hmm MET.msa MET-target.fa 1 --max
+    time python3 bin/pipeline2.py MET-test.hmm MET.msa MET-target.fa 16 --max --batch 1
 
 It searches the included test target with the `MET-test.hmm` profile in
 maximum-sensitivity mode.  It does not exercise the MMseqs2 filtering path;
-remove `--max` to use the normal candidate-filtering workflow.  If the DUMMEST
-binary is not at the pipeline's default build location, add
-`--dummer-bin bin/dummer`.
+remove `--max` to use the normal candidate-filtering workflow.  The pipeline
+defaults to `bin/dummerl`; override with `--dummer-bin bin/dummer`.
 
 ## Fast, low-memory version
 
-`dummerl` uses half as much memory, and is faster, but is more
-prone to numeric overflow.  (It uses single-precision instead of
-double-precision floating-point numbers.)
+`dummerl` is the pipeline default: it is faster and, with the packed
+overflow-proof score representation, uses less memory than the double build,
+but it is more prone to numeric overflow.  (It uses single-precision instead
+of double-precision floating-point numbers.)
 
 ## Options
 
