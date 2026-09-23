@@ -3129,7 +3129,7 @@ int main(int argc, char *argv[]) {
     int randomSeqNum = OPT_t;
     int randomSeqLen = OPT_l;
     int border = OPT_b;
-    int batchSequencesOpt = 0; // 0 => threads * 10000
+    int batchSequencesOpt = 0; // 0 => threads * 25000
     int backgroundProbsType = 'G';
     char* scoresFilename = nullptr;
     int numThreadsOpt = std::thread::hardware_concurrency();
@@ -3163,7 +3163,7 @@ Options for random sequences:\n\
   -l L, --length L  length of each random sequence (default: " STR(OPT_l) ")\n\
      -b B, --border B  add this size border to each random sequence (default: " STR(OPT_b) ")\n\
   --batch N         stream sequences in chunks of N, printing as each is done\n\
-                    (default: threads * 10000, i.e. one chunk for small inputs)\n\
+                    (default: threads * 25000, i.e. one chunk for small inputs)\n\
    -S F, --scores-file F  write adjusted bit scores of random sequences to file F\n\
                               and exit (skips sequence search)\n\
 \n\
@@ -3593,7 +3593,7 @@ Forward-only pre-filter options:\n\
 
     int batchSequences = (batchSequencesOpt > 0)
                              ? batchSequencesOpt
-                             : (int)((long)numThreadsOpt * 10000);
+                             : (int)((long)numThreadsOpt * 25000);
 
     std::vector<Sequence> sequences;
     std::vector<std::vector<SequenceRequest>> allRequests(numOfProfiles);
