@@ -100,6 +100,10 @@ const int simdLen = simdFltLen;
 using simd_t = Kokkos::Experimental::simd<Float>;
 constexpr auto simdWidth = simd_t::size();
 
+// Overflow-proof DP support (ExpScore pairs, ExpMatrix, rescale helpers).
+// Included here because it is typed on Float/simd_t/simdWidth above.
+#include "dummer-ovf.hh"
+
 Float STOP_CODON_PROB = OPT_stop;
 Float BG_STOP_CODON_PROB = OPT_bg_stop; // 3/64
 
@@ -180,10 +184,11 @@ const int minSeparation = 32; // xxx ???
 
 // down-scale probabilities by this amount, to delay overflow:
 const Float scale = 1.0 / (1 << 30) / (1 << 30) / (1 << 3); // sqrt[min normal float]
-const Float invScale = 1.0 / scale;
 const int shift = 63; // add this to scores, to undo the scaling
 
 int verbosity = 0;
+
+static std::mutex g_cout_mutex;
 
 const int nonLetterWidth = 9; // number of non-letter values per position
 
@@ -258,21 +263,24 @@ struct SequenceRequest {
 };
 
 struct AlignedSimilarity {
-    double probRatio;
+    // Exact log(probRatio) in static-scale units: for beyond-double hits the
+    // materialized double would saturate to +inf while this stays finite, so
+    // score/E printout never needs log()/pow() of a saturated value.
+    // -INFINITY iff there is no hit (or the placeholder).
+    double logProbRatio;
     int anchor1, anchor2;
-    Float wEndAnchored;
     std::vector<SegmentPair> alignment;
 
     bool operator<(const AlignedSimilarity &other) const {
-        return this->probRatio < other.probRatio;
+        return this->logProbRatio < other.logProbRatio;
     }
     bool operator>(const AlignedSimilarity &other) const {
-        return this->probRatio > other.probRatio;
+        return this->logProbRatio > other.logProbRatio;
     }
 };
 
 struct FinalSimilarity {
-    double probRatio;
+    double logProbRatio;
     size_t profileNum;
     size_t strandNum;
     int anchor1, anchor2;
@@ -449,7 +457,27 @@ void addAlignedSequence(std::vector<char> &gappedSeq, const std::vector<SegmentP
 int strandPosition(size_t strandNum, int seqLength, int position) {
     return (strandNum % 2) ? seqLength - position : position;
 }
-void printSimilarity(const char *names, Profile &p, Sequence s, const FinalSimilarity &sim,
+// Decimal display for log-scores: fixed notation (never scientific) with
+// trailing zeros trimmed; non-finite stays "-inf" so test_scores.sh
+// awk '$5!="-inf"' keeps working. Computation stays in double.
+inline std::string scoreStr(double v) {
+    if (v == 0.0) v = 0.0; // normalize -0.0
+    if (!std::isfinite(v)) {
+        std::ostringstream os;
+        os << v;
+        return os.str();
+    }
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(6) << v;
+    std::string s = os.str();
+    auto dot = s.find('.');
+    if (dot != std::string::npos) {
+        s.erase(s.find_last_not_of('0') + 1);
+        if (s.back() == '.') s.pop_back();
+    }
+    return s;
+}
+void printSimilarity(const char *names, const Profile &p, Sequence s, const FinalSimilarity &sim,
                      double evalue) {
     if (std::isnan(evalue)) {
         return;
@@ -473,7 +501,7 @@ void printSimilarity(const char *names, Profile &p, Sequence s, const FinalSimil
     int w2 = std::max(numOfDigits(sim.start1), numOfDigits(start2));
     int w3 = std::max(numOfDigits(span1), numOfDigits(span2));
     int w4 = std::max(numOfDigits(p.length), numOfDigits(reportSeqLength));
-    std::cout << "a score=" << (log(sim.probRatio) + shift) << " E=" << evalue
+    std::cout << "a score=" << scoreStr(sim.logProbRatio + shift) << " E=" << evalue
               << " anchor=" << sim.anchor1 << "," << anchor2 << "\n";
     std::cout << "s " << std::left << std::setw(w1) << names + p.nameIdx << " " << std::right
               << std::setw(w2) << sim.start1 << " " << std::setw(w3) << span1 << " " << '+' << " "
@@ -514,116 +542,6 @@ void addReverseMatch(std::vector<SegmentPair> &alignment, int pos1, int pos2) {
     SegmentPair sp = {pos1, pos2, 1};
     alignment.push_back(sp);
 }
-
-using DP_Cell = Float;
-template <typename T, bool Rolling = false, int PrePad = 0, int PostPad = 0>
-class FlatMatrix {
-    std::vector<T> data;
-    size_t logical_cols;
-    size_t logical_rows;
-    int offset_ = 0;
-
-    size_t phys_cols() const { return PrePad + logical_cols + PostPad; }
-
-    int phys_index(int j) const { return (j - offset_) + PrePad; }
-
-public:
-    FlatMatrix() : logical_cols(0), logical_rows(0) {}
-
-    int offset() const { return offset_; }
-    void set_offset(int off) { offset_ = off; }
-
-    T get(size_t i, int j) const {
-        int p = phys_index(j);
-        if (p < 0 || p >= (int)phys_cols()) return T{};
-        if constexpr (Rolling)
-            return data[(i & 1) * phys_cols() + p];
-        else
-            return data[i * phys_cols() + p];
-    }
-
-    void set(size_t i, int j, T val) {
-        int p = phys_index(j);
-        if (p < 0 || p >= (int)phys_cols()) return;
-        if constexpr (Rolling)
-            data[(i & 1) * phys_cols() + p] = val;
-        else
-            data[i * phys_cols() + p] = val;
-    }
-
-    void resize(size_t r, size_t c) {
-        offset_ = 0;
-        logical_rows = r;
-        logical_cols = c;
-        size_t n = Rolling ? 2 : r;
-        size_t total = n * phys_cols();
-        data.resize(total);
-    }
-
-    void assign(size_t r, size_t c, T init = T()) {
-        offset_ = 0;
-        logical_rows = r;
-        logical_cols = c;
-        size_t n = Rolling ? 2 : r;
-        size_t total = n * phys_cols();
-        data.assign(total, init);
-        for (size_t i = 0; i < n; ++i) {
-            T *row = data.data() + i * phys_cols();
-            std::fill_n(row, PrePad, T{});
-            std::fill_n(row + PrePad + logical_cols, PostPad, T{});
-        }
-    }
-
-    inline T &operator()(size_t i, int j) {
-        if constexpr (Rolling) {
-            return data[(i & 1) * phys_cols() + phys_index(j)];
-        } else {
-            return data[i * phys_cols() + phys_index(j)];
-        }
-    }
-
-    inline const T &operator()(size_t i, int j) const {
-        if constexpr (Rolling) {
-            return data[(i & 1) * phys_cols() + phys_index(j)];
-        } else {
-            return data[i * phys_cols() + phys_index(j)];
-        }
-    }
-
-    inline void clear_row(size_t i, T init_val = T()) {
-        size_t actual_row = Rolling ? (i & 1) : i;
-        auto row_start = data.begin() + actual_row * phys_cols() + PrePad;
-        std::fill(row_start, row_start + logical_cols, init_val);
-    }
-
-    inline T *row_ptr(size_t i) {
-        if constexpr (Rolling) {
-            return data.data() + (i & 1) * phys_cols() + PrePad;
-        } else {
-            return data.data() + i * phys_cols() + PrePad;
-        }
-    }
-
-    inline const T *row_ptr(size_t i) const {
-        if constexpr (Rolling) {
-            return data.data() + (i & 1) * phys_cols() + PrePad;
-        } else {
-            return data.data() + i * phys_cols() + PrePad;
-        }
-    }
-
-    size_t cols() const { return logical_cols; }
-
-    void set_cols(size_t c) {
-        offset_ = 0;
-        logical_cols = c;
-        size_t n = Rolling ? 2 : logical_rows;
-        size_t total = n * phys_cols();
-        data.resize(total);
-    }
-
-    size_t rows() const { return Rolling ? 2 : logical_rows; }
-};
 
 template <typename T, int PrePad = 0, int PostPad = 0>
 class PaddedVec {
@@ -671,9 +589,17 @@ public:
     int logical_size() const { return logical_size_; }
 };
 
+// Multiply one PaddedVec range by a prebuilt per-lane factor (vectorized).
+// lo may be negative for front-padded buffers (right_side starts at -3);
+// data() points at logical 0, so padding is reachable through it.
+template <typename T, int PrePad, int PostPad>
+inline void rescaleVec(PaddedVec<T, PrePad, PostPad> &vec, int lo, int hi, simd_t factor) {
+    rescaleVec(vec.data(), lo, hi, factor);
+}
+
 // SIMD-native 2D matrix: rows of PaddedVec<simd_t>.  Lane k of element [i][j]
-// holds the value for sequence k at (row i, column j).  This eliminates the
-// per-lane gather/scatter transpose that FlatMatrix required.
+// holds the value for sequence k at (row i, column j), so a whole batch of
+// sequences moves through the DP with one vector op per cell.
 template <int PrePad = 0, int PostPad = 0>
 class SimdMatrix {
     std::vector<PaddedVec<simd_t, PrePad, PostPad>> rows_;
@@ -702,61 +628,78 @@ struct DPScratch {
     SimdMatrix<0, 0> W1;
     // 2-row rolling buffer for findSimilaritiesBackwardOnly
     std::array<PaddedVec<simd_t, 0, 0>, 2> W1_rolling;
-    SimdMatrix<0, 0> X;
-    SimdMatrix<3, 0> X_pfx;
+    // Combined-score matrices in scalar ExpScore (per-row/per-lane rescaled)
+    ExpMatrix<0> X;
+    ExpMatrix<3> X_pfx;
+    // Rebuilt suffix-optimal values for forward traceback (pair domain)
+    ExpMatrix<0> Wopt;
+    // Cumulative 2^-64 dynamic rescalings per (profile row, lane).
+    // Bulk buffers stay single-scale by inheritance: fwdCum[i] starts as
+    // fwdCum[i-1] (forward ascends), bwdCum[i] starts as bwdCum[i+1]
+    // (backward descends); triggers only increment the current row.
+    std::vector<std::array<int, simdWidth>> fwdCum, bwdCum;
 
     // Reusable temporary buffers for findSimilarities
     PaddedVec<simd_t, 0, 0> W0_curr, W0_next;
     PaddedVec<simd_t, 0, 0> null_probs_prefix, null_probs_suffix;
     PaddedVec<simd_t, 0, 0> Y0_next, Y0_curr;
     PaddedVec<simd_t, 0, 0> null_model_prefix, null_model_suffix;
-    PaddedVec<simd_t, 3, 0> right_side, right_side_EV;
-    PaddedVec<simd_t, 0, 3> left_side, left_side_EV;
+    PaddedVec<simd_t, 3, 0> right_side;
+    PaddedVec<simd_t, 0, 3> left_side;
+    // EV side buffers in scalar ExpScore (pair domain, never overflows):
+    // right_side_EV needs front padding (writes j-3), left_side_EV needs
+    // back padding (writes j+3). Bulk side buffers stay SIMD Float.
+    ExpVector<3> right_side_EV;
+    ExpVector<0> left_side_EV;
     std::array<std::vector<AlignedSimilarity>, simdWidth> opt_profile_position;
     std::array<std::vector<bool>, simdWidth> aligned;
     std::vector<uint8_t> transposed_decoded;
     PaddedVec<simd_t, 4, 4> bg_codon_probs;
 
-    // Per-lane anchor tracking — indexed by sequence position j
-    std::array<std::vector<Float>, simdWidth> best_wMid;
-    std::array<std::vector<Float>, simdWidth> best_wEnd;
+    // Per-lane anchor tracking — indexed by sequence position j.
+    // best_wMid holds static-scale-unit pairs (never overflows).
+    std::array<std::vector<ExpScore>, simdWidth> best_wMid;
     std::array<std::vector<int>, simdWidth> best_i;
 
-    // SIMD-native best trackers indexed by DP column. Updated branchlessly
-    // in the hot loop; extracted into the per-lane arrays after the pass.
-    std::vector<simd_t> best_wMid_phys, best_wEnd_phys, best_i_phys;
+    // Per-column best trackers. Updated per lane in the hot loop;
+    // extracted into the per-lane arrays after the pass.
+    std::vector<std::array<ExpScore, simdWidth>> best_wMid_phys;
+    std::vector<std::array<int, simdWidth>> best_i_phys;
 
     // Current DP column count (= max sequence length in batch)
     int active_dp_width = 0;
 };
-struct DP_Cell_v2 {
-    Float metric;
-    int i, j;
-    bool emit = false;
-
-    constexpr bool operator< (const DP_Cell_v2 &other) const {
-        return metric < other.metric;
-    }
-};
 
 void addForwardAlignment(int idx, size_t profileLength, std::vector<SegmentPair> &alignment, int iBeg, int jBeg,
-                         DPScratch &scratch) {
-    int cols = (int)scratch.W1.cols();
+                          DPScratch &scratch) {
+    int cols = (int)scratch.Wopt.cols();
     int dp_bound = cols - 4;
 
+    // All candidates compared as ExpScore in static-scale units (same
+    // formulas as before, but with double-mantissa range so overflowed
+    // regimes keep their true ordering). Wopt holds the rebuilt
+    // suffix-optimal values; left_side_EV is already in pair domain.
+    // An all-zero tie leaves bi/bj at the sentinel and exits the walk.
     int i = iBeg, abs_pos = jBeg;
     while (i <= profileLength && abs_pos < dp_bound) {
-        auto choice = std::max({
-            DP_Cell_v2{.metric=(abs_pos + 3 < cols ? scratch.X.get_lane(i, abs_pos + 3, idx) + scratch.W1.get_lane(i + 1, abs_pos + 3, idx) : -INFINITY), .i=i + 1, .j=abs_pos + 3, .emit=true},
-            DP_Cell_v2{.metric=scratch.W1.get_lane(i + 1, abs_pos, idx), .i=i + 1, .j=abs_pos, .emit=false},
-            DP_Cell_v2{.metric=scratch.W1.get_lane(i, abs_pos + 1, idx), .i=i, .j=abs_pos + 1, .emit=false},
-            DP_Cell_v2{.metric=scratch.left_side_EV[abs_pos][idx], .i=INT_MAX, .j=INT_MAX, .emit=false},
-        });
+        ExpScore best{0.0, 0};
+        int bi = INT_MAX, bj = INT_MAX;
+        bool bemit = false;
+        auto consider = [&](const ExpScore &cand, int ni, int nj, bool emit) {
+            if (expLess(best, cand)) { best = cand; bi = ni; bj = nj; bemit = emit; }
+        };
+        if (abs_pos + 3 < cols)
+            consider(expAdd(scratch.X.get_lane(i, abs_pos + 3, idx),
+                            scratch.Wopt.get_lane(i + 1, abs_pos + 3, idx)),
+                     i + 1, abs_pos + 3, true);
+        consider(scratch.Wopt.get_lane(i + 1, abs_pos, idx), i + 1, abs_pos, false);
+        consider(scratch.Wopt.get_lane(i, abs_pos + 1, idx), i, abs_pos + 1, false);
+        consider(scratch.left_side_EV[abs_pos][idx], INT_MAX, INT_MAX, false);
 
-        if (choice.emit) {
+        if (bemit) {
             addForwardMatch(alignment, i, abs_pos + 1);
         }
-        i = choice.i, abs_pos = choice.j;
+        i = bi, abs_pos = bj;
     }
 }
 
@@ -764,31 +707,38 @@ void addReverseAlignment(int idx, std::vector<SegmentPair> &alignment, int iEnd,
                          DPScratch &scratch) {
     int i = iEnd - 1, abs_pos = jEnd;
     while (i >= 0 && abs_pos >= 0) {
-        DP_Cell opt_succ = 0;
-        if (i >= 1 && abs_pos >= 3) {
-            opt_succ = scratch.X_pfx.get_lane(i - 1, abs_pos - 3, idx);
+        ExpScore best{0.0, 0};
+        int bi = -1, bj = -1;
+        bool bemit = false;
+        auto consider = [&](const ExpScore &cand, int ni, int nj, bool emit) {
+            if (expLess(best, cand)) { best = cand; bi = ni; bj = nj; bemit = emit; }
+        };
+        if (abs_pos >= 3) {
+            ExpScore opt_succ = (i >= 1) ? scratch.X_pfx.get_lane(i - 1, abs_pos - 3, idx)
+                                         : ExpScore{0.0, 0};
+            consider(expAdd(scratch.X.get_lane(i, abs_pos, idx), opt_succ),
+                     i - 1, abs_pos - 3, true);
         }
-        auto choice = std::max({
-            DP_Cell_v2{.metric=(abs_pos >= 3 ? scratch.X.get_lane(i, abs_pos, idx) + opt_succ : -INFINITY), .i=i - 1, .j=abs_pos - 3, .emit=true},
-            DP_Cell_v2{.metric=(i >= 1 ? scratch.X_pfx.get_lane(i - 1, abs_pos, idx) : -INFINITY), .i=i - 1, .j=abs_pos, .emit=false},
-            DP_Cell_v2{.metric=(abs_pos > 0 ? scratch.X_pfx.get_lane(i, abs_pos - 1, idx) : -INFINITY), .i=i, .j=abs_pos - 1, .emit=false},
-            DP_Cell_v2{.metric=scratch.right_side_EV[abs_pos][idx], .i=-1, .j=-1, .emit=false},
-        });
+        if (i >= 1)
+            consider(scratch.X_pfx.get_lane(i - 1, abs_pos, idx), i - 1, abs_pos, false);
+        if (abs_pos > 0)
+            consider(scratch.X_pfx.get_lane(i, abs_pos - 1, idx), i, abs_pos - 1, false);
+        consider(scratch.right_side_EV[abs_pos][idx], -1, -1, false);
 
-        if (choice.emit) {
+        if (bemit) {
             addReverseMatch(alignment, i, abs_pos - 2);
         }
-        i = choice.i, abs_pos = choice.j;
+        i = bi, abs_pos = bj;
     }
 }
 
 void addMidAnchored(int idx, size_t profileLength, std::vector<AlignedSimilarity> &similarities, int anchor1, int anchor2,
-                    Float wBegAnchored, Float wEndAnchored, DPScratch &scratch) {
-    Float wMidAnchored = wEndAnchored * wBegAnchored;
-    AlignedSimilarity s = {wMidAnchored / scale, anchor1, anchor2, wEndAnchored};
+                    double logProbRatio, DPScratch &scratch) {
+    AlignedSimilarity s = {logProbRatio, anchor1, anchor2};
+    // Traceback walks exact pair-domain matrices, so it runs unconditionally:
+    // even a beyond-double report gets its full alignment.
 #ifdef ALIGN
-    if (!isinf(s.probRatio))
-        addForwardAlignment(idx, profileLength, s.alignment, anchor1, anchor2, scratch);
+    addForwardAlignment(idx, profileLength, s.alignment, anchor1, anchor2, scratch);
 #endif
     similarities.push_back(s);
 }
@@ -796,8 +746,7 @@ void addMidAnchored(int idx, size_t profileLength, std::vector<AlignedSimilarity
 void finishMidAnchored(int idx, AlignedSimilarity &s, DPScratch &scratch) {
     reverse(s.alignment.begin(), s.alignment.end());
 #ifdef ALIGN
-    if (!isinf(s.probRatio))
-        addReverseAlignment(idx, s.alignment, s.anchor1, s.anchor2, scratch);
+    addReverseAlignment(idx, s.alignment, s.anchor1, s.anchor2, scratch);
 #endif
     reverse(s.alignment.begin(), s.alignment.end());
 }
@@ -984,9 +933,83 @@ uint8_t* buildTransposedDecoded(DPScratch& scratch, int active_dp_width, int act
     return transposed_base;
 }
 
+#ifdef ALIGN
+// Shared right/left-side EV fixup (pair domain): `side` stays SIMD Float
+// (rescale-capped); `ev` accumulates in ExpScore so the null_model multiply
+// and prefix/suffix sum can never inf before promotion. `cumRow` is the final
+// scale side[j] promotes with (bwdCum[0] for right, fwdCum[last] for left).
+// step=-1 walks j descending with targets j-1/-2/-3 and an ascending prefix
+// sum; step=+1 mirrors it (targets j+1/+2/+3, descending suffix sum).
+// bgShift is the transposed_base codon offset (-2 right, +1 left).
+// seems to be a clean way of getting expected value of null-sided junctions
+// TODO: verify logic
+// TODO: the ev[j] *= null_model term might be off by 1 idk
+template <int SPad, int SPadPost, int EPad>
+void fixupSideEV(PaddedVec<simd_t, SPad, SPadPost> &side, ExpVector<EPad> &ev,
+                 const std::array<int, simdWidth> &cumRow,
+                 const PaddedVec<simd_t, 0, 0> &null_model,
+                 simd_t null_emit_1, simd_t null_emit_2, simd_t null_emit_3,
+                 int step, int bgShift, const uint8_t *transposed_base,
+                 const Float *bg_probs_ptr, int width, int activeCount) {
+    alignas(64) Float ne1A[simdWidth], ne2A[simdWidth], ne3A[simdWidth];
+    simd_unchecked_store(null_emit_1, ne1A, Kokkos::Experimental::simd_flag_default);
+    simd_unchecked_store(null_emit_2, ne2A, Kokkos::Experimental::simd_flag_default);
+    simd_unchecked_store(null_emit_3, ne3A, Kokkos::Experimental::simd_flag_default);
+    const double c0base = (double)(Float)(1 - BACKGROUND_FRAMESHIFT_RATE - BACKGROUND_FRAMESHIFT_RATE_2);
+    const double c1base = (double)(Float)(BACKGROUND_FRAMESHIFT_RATE * 0.25);
+    const double c2base = (double)(Float)(BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625);
+    // Per-lane junction fractions for the ±1/±2 targets (j-invariant).
+    alignas(64) Float f1A[simdWidth], f2A[simdWidth];
+    for (int k = 0; k < activeCount; k++) {
+        f1A[k] = c1base * (double)ne1A[k] * (1.0 / 3.0);
+        f2A[k] = c2base * (double)ne2A[k] * (2.0 / 3.0);
+    }
+    for (int j = step < 0 ? width - 1 : 0; (step < 0) ? (j >= 0) : (j < width); j += step) {
+        const char *indices = (const char *)&transposed_base[(j + bgShift) * simdWidth];
+        SimdFloat bg_raw = simdLookup(bg_probs_ptr, indices);
+        simd_t bg_codon_emit_probs(bg_raw);
+
+        side[j + 3 * step] += (Float)(1 - BACKGROUND_FRAMESHIFT_RATE - BACKGROUND_FRAMESHIFT_RATE_2) *
+                              bg_codon_emit_probs * null_emit_3 * side[j];
+        side[j + 1 * step] += (Float)(BACKGROUND_FRAMESHIFT_RATE * 0.25) * null_emit_1 * side[j];
+        side[j + 2 * step] += (Float)(BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625) * null_emit_2 * side[j];
+
+        alignas(64) Float bgA[simdWidth], sjA[simdWidth], nmA[simdWidth];
+        simd_unchecked_store(bg_codon_emit_probs, bgA, Kokkos::Experimental::simd_flag_default);
+        simd_unchecked_store(side[j], sjA, Kokkos::Experimental::simd_flag_default);
+        simd_unchecked_store(null_model[j], nmA, Kokkos::Experimental::simd_flag_default);
+        for (int k = 0; k < activeCount; k++) {
+            ExpScore Ss = expFromScaled(sjA[k], cumRow[k]);
+            double f0 = c0base * (double)bgA[k] * (double)ne3A[k];
+            auto &ev3 = ev[j + 3 * step];
+            ev3[k] = expAdd(ev3[k], expMulFloat(Ss, f0));
+            auto &ev1 = ev[j + 1 * step];
+            ev1[k] = expAdd(ev1[k], expMulFloat(Ss, f1A[k]));
+            auto &ev2 = ev[j + 2 * step];
+            ev2[k] = expAdd(ev2[k], expMulFloat(Ss, f2A[k]));
+            auto &evj = ev[j];
+            evj[k] = expMulFloat(evj[k], (double)nmA[k]);
+        }
+        side[j] = Kokkos::max(side[j], Float(0.0));
+    }
+    // Prefix/suffix sum: ev[j] += ev[j+step], iterating so the source side
+    // is already final (opposite direction from the accumulation loop).
+    for (int j = step < 0 ? 1 : width - 2;
+         (step < 0) ? (j < width) : (j >= 0);
+         j -= step) {
+        auto &evj = ev[j];
+        auto &evsrc = ev[j + step];
+        for (int k = 0; k < activeCount; k++) {
+            evj[k] = expAdd(evj[k], evsrc[k]);
+        }
+    }
+}
+#endif
+
 void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &similarities, const Profile &profile,
              const std::array<std::vector<uint8_t>*, simdWidth> &decoded, std::array<Float, simdWidth> minProbRatio,
-             DPScratch &scratch, int activeCount, simd_t *bwdBestOut = nullptr) {
+             DPScratch &scratch, int activeCount, std::array<ExpScore, simdWidth> *bwdBestOut = nullptr,
+             bool needAlign = true) {
     assert(0 < activeCount && activeCount <= simdWidth);
 
     int maxSequenceLength = 0;
@@ -1011,6 +1034,11 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
     alignas(64) Float actual_sequence_length[simdWidth] = {};
     for (int idx = 0; idx < activeCount; idx++) {
         actual_sequence_length[idx] = (Float)decoded[idx]->size();
+    }
+    // Inactive lanes: length 1 keeps 1/len finite (0 would give
+    // +inf, and 0 * +inf = NaN in null_prob_per_pos).
+    for (int k = activeCount; k < (int)simdWidth; k++) {
+        actual_sequence_length[k] = 1;
     }
     actual_seq_len = Kokkos::Experimental::simd_unchecked_load<simd_t>(actual_sequence_length);
 
@@ -1096,11 +1124,17 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
                 null_probs_prefix[actual_sequence_length[idx] - 3][idx]
             );
         } else {
-            // For very short sequences, treat as non‑alignable (e.g., -INF or 0)
-            null_seq_log_prob[idx] = -INFINITY;
+            // For very short sequences, use a neutral finite null model.
+            // (The old -INFINITY fed exp2(+inf)=+inf into every C_*
+            // constant and poisoned the whole lane.)
+            null_seq_log_prob[idx] = 0;
         }
 
-        Float null_emit_raw = exp2(-(null_seq_log_prob[idx] / actual_sequence_length[idx]));
+        // Clamp: the true value is O(1); anything past the overflow boundary
+        // is degenerate input, and must stay finite, never +inf.
+        double e = -(double)null_seq_log_prob[idx] / (double)actual_sequence_length[idx];
+        if (!(e < (double)EXP2_HI)) e = (double)EXP2_HI;
+        Float null_emit_raw = exp2((Float)e);
         null_emit_tmp[idx] = null_emit_raw;
     }
 
@@ -1121,6 +1155,12 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
 
     scratch.W1.assign(profile.length + 2, scratch.active_dp_width + 4);
 
+    // Cumulative dynamic-rescale counters, zeroed per batch. Inheritance
+    // (bwd: row i starts as row i+1; fwd: row i starts as row i-1, applied in
+    // the loops below) keeps bulk buffers single-scale by construction.
+    scratch.fwdCum.assign(profile.length + 2, std::array<int, simdWidth>{});
+    scratch.bwdCum.assign(profile.length + 2, std::array<int, simdWidth>{});
+
     const size_t padded_seq_len = scratch.active_dp_width + 4;
     auto &Y0_next = scratch.Y0_next; Y0_next.resize(padded_seq_len, 0.0);
     auto &Y0_curr = scratch.Y0_curr; Y0_curr.resize(padded_seq_len, 0.0);
@@ -1129,7 +1169,9 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
 
     for (int j = 0; j < scratch.active_dp_width; j++) {
         simd_t exponent = -null_prob_per_pos * (actual_seq_len - (Float)1.0 - (Float)j) + null_probs_suffix[j + 1];
-        null_model_prefix[j] = Kokkos::exp2(exponent);
+        // Clamp: the true null model is O(1); past the overflow boundary the
+        // input is degenerate, and the value must stay finite, never +inf.
+        null_model_prefix[j] = Kokkos::exp2(Kokkos::min(exponent, simd_t(EXP2_HI)));
     }
     auto &null_model_suffix = scratch.null_model_suffix; null_model_suffix = null_model_prefix;
     auto &left_side = scratch.left_side;
@@ -1137,12 +1179,17 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
     auto &left_side_EV = scratch.left_side_EV;
     auto &right_side_EV = scratch.right_side_EV;
 #ifdef ALIGN
-    left_side.assign(null_model_prefix.size(), 0.0);
-    right_side.assign(null_model_prefix.size(), 0.0);
-    left_side_EV.assign(null_model_prefix.size(), 0.0);
-    right_side_EV.assign(null_model_prefix.size(), 0.0);
-    scratch.X.assign(profile.length + 2, scratch.active_dp_width + 4);
-    scratch.X_pfx.assign(profile.length + 2, scratch.active_dp_width + 4);
+    // Scores-only callers (calibration) never consume the alignment buffers:
+    // skip allocating the three ExpMatrix + side-EV vectors entirely.
+    if (needAlign) {
+        left_side.assign(null_model_prefix.size(), 0.0);
+        right_side.assign(null_model_prefix.size(), 0.0);
+        left_side_EV.assign(null_model_prefix.size());
+        right_side_EV.assign(null_model_prefix.size());
+        scratch.X.assign(profile.length + 2, scratch.active_dp_width + 4);
+        scratch.X_pfx.assign(profile.length + 2, scratch.active_dp_width + 4);
+        scratch.Wopt.assign(profile.length + 2, scratch.active_dp_width + 4);
+    }
 #endif
         const Float *bg_probs_ptr = profile.bg_probs.data() + 4;
         scratch.bg_codon_probs.resize(scratch.active_dp_width);
@@ -1164,6 +1211,11 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
             const Params &params_cur = profile.values_v2[i];
             const Float *params_emission_probabilities = profile.values + (i)*profile.width + 4;
 
+            // Dynamic-scale inheritance: this row starts at the next row's
+            // scale, so all W1/Y0 reads below are single-scale by construction.
+            if (i < profile.length)
+                scratch.bwdCum[i] = scratch.bwdCum[i + 1];
+
             const simd_t C_enter = params_cur.enter_match_probability * null_emit_3;
             const simd_t C_delta0 = params_cur.delta_prime[0];
             const simd_t C_delta1 = params_cur.delta_prime[1] * null_emit_2;
@@ -1175,7 +1227,10 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
             simd_t Z0_ring[4] = {0, 0, 0, 0};
 
             const simd_t C_eps0 = params_cur.epsilon_prime;
-            const simd_t C_scale = scale;
+            // Effective static scale for this row/lane: the seed term is
+            // stored in row scale.
+            const simd_t C_scale = simd_t(scale) * simdRowScale(scratch.bwdCum[i]);
+            simd_t row_max_bwd = simd_t(0.0);
 
             int rev_lo = 0, rev_hi = scratch.active_dp_width - 1;
 
@@ -1218,8 +1273,9 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
 
                 scatter_w1(w_val, i, j);
 #ifdef ALIGN
-                right_side[j] += w_val;
+                if (needAlign) right_side[j] += w_val;
 #endif
+                row_max_bwd = Kokkos::max(row_max_bwd, w_val);
 
                 Y0_curr[j] = Kokkos::fma(C_eps0, Y0_next[j], w_val);
                 simd_t z0_future = Z0_ring[r_3] * bg_codon_emit_probs;
@@ -1234,6 +1290,26 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
             }
 
             std::swap(Y0_curr, Y0_next);
+
+            // Per-row dynamic rescaling (backward): if any lane's row max
+            // exceeds threshold, divide that lane's row-carried state by
+            // 2^64 (exact) and record it. Y0 buffers feed row i-1, whose
+            // inherited scale picks this up; stored rows i+1.. keep theirs.
+            {
+                alignas(64) Float maxArr[simdWidth];
+                simd_unchecked_store(row_max_bwd, maxArr, Kokkos::Experimental::simd_flag_default);
+                auto [factor, any] = buildRescaleFactor(scratch.bwdCum, i, maxArr, activeCount);
+                if (any) {
+                    simd_t *rp = scratch.W1.row_ptr(i);
+                    rescaleVec(rp, 0, scratch.active_dp_width + 4, factor);
+                    rescaleVec(Y0_next, 0, (int)padded_seq_len, factor);
+                    rescaleVec(Y0_curr, 0, (int)padded_seq_len, factor);
+#ifdef ALIGN
+                    // Include front padding: the EV fixup writes j-3.
+                    if (needAlign) rescaleVec(right_side, -3, (int)right_side.size(), factor);
+#endif
+                }
+            }
         }
         }
 
@@ -1241,64 +1317,69 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
 
     for (int k = 0; k < activeCount; k++) {
         int len = (int)decoded[k]->size();
-        scratch.best_wMid[k].assign(len, Float(-INFINITY));
-        scratch.best_wEnd[k].assign(len, Float(0.0));
+        scratch.best_wMid[k].assign(len, ExpScore{0.0, 0});
         scratch.best_i[k].assign(len, -1);
     }
     size_t nphys = scratch.active_dp_width + 4;
-    scratch.best_wMid_phys.assign(nphys, simd_t(-INFINITY));
-    scratch.best_wEnd_phys.assign(nphys, simd_t(0.0));
-    scratch.best_i_phys.assign(nphys, simd_t(0.0));
+    scratch.best_wMid_phys.assign(nphys, std::array<ExpScore, simdWidth>{});
+    scratch.best_i_phys.assign(nphys, std::array<int, simdWidth>{});
     for (int j = 0; j < scratch.active_dp_width; j++) {
         simd_t exponent = -null_prob_per_pos * (Float)(j + 1) + null_probs_prefix[j];
 
-        null_model_prefix[j] = Kokkos::exp2(exponent);
+        null_model_prefix[j] = Kokkos::exp2(Kokkos::min(exponent, simd_t(EXP2_HI)));
     }
 
     if (bwdBestOut) {
         // Backward-accumulator best reproduces findSimilaritiesBackwardOnly's
         // global best without a second DP: W1 holds raw backward values here.
-        simd_t best_mid = simd_t(0.0);
+        // Promote-then-multiply in pair domain: rp is in row scale bwdCum[i],
+        // np (null_model) is static-scale (cum 0). No Float product, so a
+        // capped rp (~1e30/1e150) times a large null_model can never inf
+        // before promotion. np varies only with j, so the j loop is outer.
+        std::array<ExpScore, simdWidth> best_mid{};
         const simd_t *__restrict__ np = null_model_prefix.data();
-        for (int i = profile.length; i >= 0; i--) {
-            const simd_t *__restrict__ rp = scratch.W1.row_ptr(i);
-            for (int j = 0; j < scratch.active_dp_width; j++) {
-                best_mid = Kokkos::max(best_mid, rp[j] * np[j]);
+        for (int j = 0; j < scratch.active_dp_width; j++) {
+            alignas(64) Float narr[simdWidth];
+            simd_unchecked_store(np[j], narr, Kokkos::Experimental::simd_flag_default);
+            for (int i = profile.length; i >= 0; i--) {
+                const simd_t *__restrict__ rp = scratch.W1.row_ptr(i);
+                alignas(64) Float rarr[simdWidth];
+                simd_unchecked_store(rp[j], rarr, Kokkos::Experimental::simd_flag_default);
+                for (int k = 0; k < activeCount; k++) {
+                    ExpScore R = expFromScaled(rarr[k], scratch.bwdCum[i][k]);
+                    ExpScore cand = expMulFloat(R, (double)narr[k]);
+                    if (expLess(best_mid[k], cand)) best_mid[k] = cand;
+                }
             }
         }
         *bwdBestOut = best_mid;
     }
 
 #ifdef ALIGN
-    // seems to be a clean way of getting expected value of null-sided junctions
-    // TODO: verify logic
-    for (int j = scratch.active_dp_width - 1; j >= 0; j--) {
-        const char* indices = (const char*)&transposed_base[(j - 2) * simdWidth];
-        SimdFloat bg_raw = simdLookup(bg_probs_ptr, indices);
-        simd_t bg_codon_emit_probs(bg_raw);
-
-        right_side[j - 3] += (Float)(1 - BACKGROUND_FRAMESHIFT_RATE - BACKGROUND_FRAMESHIFT_RATE_2) * bg_codon_emit_probs *
-                             null_emit_3 * right_side[j];
-        right_side[j - 1] += (Float)(BACKGROUND_FRAMESHIFT_RATE * 0.25) * null_emit_1 * right_side[j];
-        right_side[j - 2] += (Float)(BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625) * null_emit_2 * right_side[j];
-
-        right_side_EV[j - 3] += (Float)(1 - BACKGROUND_FRAMESHIFT_RATE - BACKGROUND_FRAMESHIFT_RATE_2) * bg_codon_emit_probs *
-                             null_emit_3 * right_side[j];
-        right_side_EV[j - 1] += (Float)(BACKGROUND_FRAMESHIFT_RATE * 0.25) * null_emit_1 * (Float)(1.0 / 3.0) * right_side[j];
-        right_side_EV[j - 2] += (Float)(BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625) * null_emit_2 * (Float)(2.0 / 3.0) * right_side[j];
-
-        right_side_EV[j] *= null_model_prefix[j]; // TODO: this one specifically (might be off by 1 idk)
-        right_side[j] = Kokkos::max(right_side[j], Float(0.0));
-    }
-    for (int j = 1; j < scratch.active_dp_width; j++) {
-        right_side_EV[j] += right_side_EV[j - 1];
-    }
+    if (needAlign)
+        fixupSideEV(right_side, right_side_EV, scratch.bwdCum[0], null_model_prefix,
+                    null_emit_1, null_emit_2, null_emit_3,
+                    -1, -2, transposed_base, bg_probs_ptr,
+                    scratch.active_dp_width, activeCount);
 #endif
 
-    simd_t global_best = simd_t(0.0);
+    std::array<ExpScore, simdWidth> global_best_pair{};
+    // Per-lane sequence lengths (row-invariant): Float copy for the SIMD
+    // mask, int copy for the per-lane scalar guards.
+    alignas(64) Float seq_len_f[simdWidth] = {};
+    int seq_len_i[simdWidth] = {};
+    for (int k = 0; k < activeCount; k++) {
+        seq_len_i[k] = (int)decoded[k]->size();
+        seq_len_f[k] = (Float)seq_len_i[k];
+    }
+    simd_t seq_len_vec = Kokkos::Experimental::simd_unchecked_load<simd_t>(seq_len_f);
     for (int i = 0; i <= profile.length; i++) {
         const Params &params_cur = profile.values_v2[i];
         const Float *params_emission_probabilities = profile.values + (i)*profile.width + 4;
+
+        // Dynamic-scale inheritance: row i starts at row i-1's scale.
+        if (i > 0)
+            scratch.fwdCum[i] = scratch.fwdCum[i - 1];
 
         // Pre-calculate constants
         const simd_t C_enter = params_cur.enter_match_probability * null_emit_3;
@@ -1310,7 +1391,9 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
         const simd_t C_delta1 = params_cur.delta_prime[1] * null_emit_2;
         const simd_t C_delta2 = params_cur.delta_prime[2] * null_emit_1;
         const simd_t C_eps0 = params_cur.epsilon_prime;
-        const simd_t C_scale = scale;
+        // Effective static scale for this row/lane (seed stored in row scale).
+        const simd_t C_scale = simd_t(scale) * simdRowScale(scratch.fwdCum[i]);
+        simd_t row_max_fwd = simd_t(0.0);
 
         simd_t Z0_ring[4] = {0, 0, 0, 0};
         simd_t Z1_ring[4] = {0, 0, 0, 0};
@@ -1333,34 +1416,14 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
             return gather_w1(i, col);
         };
 
-#ifdef ALIGN
-        auto gather_xpfx = [&](int i_row, int col) -> simd_t {
-            return scratch.X_pfx.get(i_row, col);
-        };
-        auto scatter_x = [&](simd_t val, int i_row, int col) {
-            scratch.X.set(i_row, col, val);
-        };
-        auto scatter_xpfx = [&](simd_t val, int i_row, int col) {
-            scratch.X_pfx.set(i_row, col, val);
-        };
-#endif
-
         int lo = 0, hi = scratch.active_dp_width - 1;
-
-        // Per-lane sequence lengths for variable-length masking
-        alignas(64) Float seq_len_f[simdWidth] = {};
-        for (int k = 0; k < activeCount; k++) {
-            seq_len_f[k] = (Float)decoded[k]->size();
-        }
-        simd_t seq_len_vec = Kokkos::Experimental::simd_unchecked_load<simd_t>(seq_len_f);
 
         int seq_start = lo;
 
         // Shift register for w[1..3] — avoids 3 matrix reads per iteration
         simd_t w_shift[3] = {0,0, 0}; // w_shift[0]=w0(i,j-1), [1]=w0(i,j-2), [2]=w0(i,j-3)
-        simd_t pfx_prev = simd_t(0.0); // X_pfx(i, j-1) rolling value
-
-        const simd_t simd_invScale(invScale);
+        // Rolling X_pfx(i, j-1) per lane (pair domain)
+        std::array<ExpScore, simdWidth> pfx_prev{};
 
         for (int j = seq_start; j <= hi; j++) {
 
@@ -1378,19 +1441,35 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
             simd_t X_ij = C_enter * codon_emit_probs * w3;
 
 #ifdef ALIGN
-            {
-                simd_t X_ij_EV = X_ij * gather_w1_ip1(j) * simd_invScale;
-                scatter_x(X_ij_EV, i, j);
+            // Combined score X(i,j) = Xfwd * B(i+1,j) * invScale in static
+            // units (expMulInvScale folds invScale into the exponent), then
+            // the X_pfx prefix-max chain in pair domain. Replaces the former
+            // float computation that overflowed to +inf.
+            if (needAlign) {
+                alignas(64) Float xfwdA[simdWidth], w1nA[simdWidth];
+                simd_unchecked_store(X_ij, xfwdA, Kokkos::Experimental::simd_flag_default);
+                simd_t w1n = gather_w1_ip1(j); // 0 when row i+1 is unavailable
+                simd_unchecked_store(w1n, w1nA, Kokkos::Experimental::simd_flag_default);
+                const bool im1 = (i - 1 >= 0);
+                for (int k = 0; k < activeCount; k++) {
+                    ExpScore Xev{0.0, 0};
+                    if (xfwdA[k] > 0 && w1nA[k] > 0) {
+                        ExpScore xf = expFromScaled(xfwdA[k], scratch.fwdCum[i][k]);
+                        ExpScore bf = expFromScaled(w1nA[k], scratch.bwdCum[i + 1][k]);
+                        Xev = expMulInvScale(xf, bf);
+                    }
+                    scratch.X.set_lane(Xev, i, j, k);
 
-                simd_t opt_succ = (i - 1 >= 0) ? gather_xpfx(i - 1, j - 3) : simd_t(0);
-
-                simd_t pfx_mx = (i - 1 >= 0) ? gather_xpfx(i - 1, j) : simd_t(0);
-                pfx_mx = Kokkos::max(pfx_mx, pfx_prev);
-
-                pfx_mx = Kokkos::max(pfx_mx, X_ij_EV + opt_succ);
-                pfx_mx = Kokkos::max(pfx_mx, right_side_EV[j]);
-                scatter_xpfx(pfx_mx, i, j);
-                pfx_prev = pfx_mx;
+                    ExpScore opt_succ = im1 ? scratch.X_pfx.get_lane(i - 1, j - 3, k) : ExpScore{0.0, 0};
+                    ExpScore pfx = im1 ? scratch.X_pfx.get_lane(i - 1, j, k) : ExpScore{0.0, 0};
+                    if (expLess(pfx, pfx_prev[k])) pfx = pfx_prev[k];
+                    ExpScore c = expAdd(Xev, opt_succ);
+                    if (expLess(pfx, c)) pfx = c;
+                    const ExpScore &rs = scratch.right_side_EV[j][k];
+                    if (expLess(pfx, rs)) pfx = rs;
+                    scratch.X_pfx.set_lane(pfx, i, j, k);
+                    pfx_prev[k] = pfx;
+                }
             }
 #endif
             Z0_ring[r_0] =
@@ -1402,15 +1481,31 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
             simd_t w0 = w0_row_i[j];
             w0 += Z0_ring[r_0] + Z1_ring[r_0] + Z2_ring[r_0] + null_model_prefix[j] * C_scale;
 #ifdef ALIGN
-            left_side[j] += w0;
+            if (needAlign) left_side[j] += w0;
 #endif
+            row_max_fwd = Kokkos::max(row_max_fwd, w0);
 
-            simd_t wMid = w0 * gather_w1_i(j) * simd_invScale;
-
-            global_best = Kokkos::max(global_best, wMid);
+            // Combined wMid = w0*B(i,j)*invScale per lane in ExpScore.
+            alignas(64) Float w0A[simdWidth], w1iA[simdWidth];
+            simd_unchecked_store(w0, w0A, Kokkos::Experimental::simd_flag_default);
+            simd_t w1i = gather_w1_i(j);
+            simd_unchecked_store(w1i, w1iA, Kokkos::Experimental::simd_flag_default);
             // Per-lane variable-length mask (batches pack different lengths)
             simd_t j_vec((Float)j);
             simd_t is_active = Kokkos::Experimental::condition(j_vec < seq_len_vec, simd_t(1), simd_t(0));
+            for (int k = 0; k < activeCount; k++) {
+                ExpScore wMid{0.0, 0};
+                if (w0A[k] > 0 && w1iA[k] > 0 && j < seq_len_i[k]) {
+                    ExpScore F = expFromScaled(w0A[k], scratch.fwdCum[i][k]);
+                    ExpScore B = expFromScaled(w1iA[k], scratch.bwdCum[i][k]);
+                    wMid = expMulInvScale(F, B);
+                }
+                if (expLess(global_best_pair[k], wMid)) global_best_pair[k] = wMid;
+                if (expLess(scratch.best_wMid_phys[j][k], wMid)) {
+                    scratch.best_wMid_phys[j][k] = wMid;
+                    scratch.best_i_phys[j][k] = i;
+                }
+            }
             w0 *= is_active;
             w0_row_i[j] = w0;
 
@@ -1426,15 +1521,24 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
             Y0_curr[j] *= is_active;
             if (w0_row_ip1)
                 w0_row_ip1[j] += X_ij + Y0_curr[j] + C_delta1 * w2 + C_delta2 * w1;
+        }
 
-            // Per-lane anchor tracking — branchless SIMD update per DP column
-            {
-                auto better_mask = wMid > scratch.best_wMid_phys[j];
-                if (Kokkos::Experimental::any_of(better_mask)) {
-                    scratch.best_wMid_phys[j] = Kokkos::max(scratch.best_wMid_phys[j], wMid);
-                    scratch.best_wEnd_phys[j] = Kokkos::Experimental::condition(better_mask, w0, scratch.best_wEnd_phys[j]);
-                    scratch.best_i_phys[j] = Kokkos::Experimental::condition(better_mask, simd_t((Float)i), scratch.best_i_phys[j]);
+        // Per-row dynamic rescaling (forward): divide triggered lanes'
+        // row-carried state by 2^64 (exact). W0_next holds row i+1's
+        // incoming sums; Y0 buffers feed row i+1 after the swap below.
+        {
+            alignas(64) Float maxArr[simdWidth];
+            simd_unchecked_store(row_max_fwd, maxArr, Kokkos::Experimental::simd_flag_default);
+            auto [factor, any] = buildRescaleFactor(scratch.fwdCum, i, maxArr, activeCount);
+            if (any) {
+                if (w0_row_ip1) {
+                    rescaleVec(scratch.W0_next, 0, scratch.active_dp_width + 4, factor);
                 }
+                rescaleVec(Y0_next, 0, (int)padded_seq_len, factor);
+                rescaleVec(Y0_curr, 0, (int)padded_seq_len, factor);
+#ifdef ALIGN
+                if (needAlign) rescaleVec(left_side, 0, (int)left_side.size(), factor);
+#endif
             }
         }
 
@@ -1446,12 +1550,10 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
     }
 
     {
-        alignas(64) Float fwd_best_arr[simdWidth];
-        simd_unchecked_store(global_best, fwd_best_arr, Kokkos::Experimental::simd_flag_default);
-
         bool any_fwd_above = false;
         for (int k = 0; k < activeCount; k++) {
-            if (minProbRatio[k] < 0 || fwd_best_arr[k] >= minProbRatio[k]) {
+            double gb = expToDouble(global_best_pair[k]);
+            if (minProbRatio[k] < 0 || gb >= (double)minProbRatio[k]) {
                 any_fwd_above = true;
                 break;
             }
@@ -1462,65 +1564,51 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
     }
 
 #ifdef ALIGN
-    for (int j = 0; j < scratch.active_dp_width; j++) {
-        const char* indices = (const char*)&transposed_base[(j + 1) * simdWidth];
-        SimdFloat bg_raw = simdLookup(bg_probs_ptr, indices);
+    if (needAlign) {
+        fixupSideEV(left_side, left_side_EV, scratch.fwdCum[profile.length], null_model_suffix,
+                    null_emit_1, null_emit_2, null_emit_3,
+                    +1, +1, transposed_base, bg_probs_ptr,
+                    scratch.active_dp_width, activeCount);
 
-        simd_t bg_codon_emit_probs(bg_raw);
+        // Suffix-optimal rebuild in pair domain (same max as before —
+        // max(down, right, left_side_EV, X + succ) — but X and the result live
+        // in ExpScore so overflowed regimes keep true ordering).
+        // MUST read the already-rebuilt row i+1 (Wopt), exactly as the original
+        // in-place W1 rebuild did. W1 keeps its raw backward values and is never
+        // consulted by the traceback.
+        for (int i = profile.length; i >= 0; i--) {
+            std::array<ExpScore, simdWidth> opt_right_rolling{};
 
-        left_side[j + 3] += (Float)(1 - BACKGROUND_FRAMESHIFT_RATE - BACKGROUND_FRAMESHIFT_RATE_2) * bg_codon_emit_probs * null_emit_3 * left_side[j];
-        left_side[j + 1] += (Float)(BACKGROUND_FRAMESHIFT_RATE * 0.25) * null_emit_1 * left_side[j];
-        left_side[j + 2] += (Float)(BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625) * null_emit_2 * left_side[j];
-
-        left_side_EV[j + 3] += (Float)(1 - BACKGROUND_FRAMESHIFT_RATE - BACKGROUND_FRAMESHIFT_RATE_2) * bg_codon_emit_probs * null_emit_3 * left_side[j];
-        left_side_EV[j + 1] += (Float)(BACKGROUND_FRAMESHIFT_RATE * 0.25) * null_emit_1 * (Float)(1.0 / 3.0) * left_side[j];
-        left_side_EV[j + 2] += (Float)(BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625) * null_emit_2 * (Float)(2.0 / 3.0) * left_side[j];
-
-        left_side_EV[j] *= null_model_suffix[j];
-        left_side[j] = Kokkos::max(left_side[j], Float(0.0));
-    }
-    for (int j = scratch.active_dp_width - 2; j >= 0; j--) {
-        left_side_EV[j] += left_side_EV[j + 1];
-    }
-
-    {
-    auto gather_w1 = [&](int i_row, int col) -> simd_t {
-        return scratch.W1.get(i_row, col);
-    };
-    auto gather_x = [&](int i_row, int col) -> simd_t {
-        return scratch.X.get(i_row, col);
-    };
-    auto scatter_w1 = [&](simd_t val, int i_row, int col) {
-        scratch.W1.set(i_row, col, val);
-    };
-
-    for (int i = profile.length; i >= 0; i--) {
-        simd_t opt_right_rolling = simd_t(0.0);
-
-        bool ip1_avail = (i + 1 <= profile.length);
-        for (int j = scratch.active_dp_width - 1; j >= 0; j--) {
-            simd_t opt_succ = ip1_avail ? gather_w1(i + 1, j + 3) : simd_t(0);
-            simd_t opt_down = ip1_avail ? gather_w1(i + 1, j) : simd_t(0);
-
-            auto opt = Kokkos::max(opt_down, opt_right_rolling);
-            opt = Kokkos::max(opt, left_side_EV[j]);
-            opt = Kokkos::max(opt, gather_x(i, j) + opt_succ);
-            scatter_w1(opt, i, j);
-            opt_right_rolling = opt;
+            bool ip1_avail = (i + 1 <= profile.length);
+            for (int j = scratch.active_dp_width - 1; j >= 0; j--) {
+                for (int k = 0; k < activeCount; k++) {
+                    ExpScore opt = ip1_avail ? scratch.Wopt.get_lane(i + 1, j, k) : ExpScore{0.0, 0};
+                    if (expLess(opt, opt_right_rolling[k])) opt = opt_right_rolling[k];
+                    const ExpScore &lv = scratch.left_side_EV[j][k];
+                    if (expLess(opt, lv)) opt = lv;
+                    if (ip1_avail) {
+                        ExpScore em = expAdd(scratch.X.get_lane(i, j, k),
+                                             scratch.Wopt.get_lane(i + 1, j + 3, k));
+                        if (expLess(opt, em)) opt = em;
+                    }
+                    scratch.Wopt.set_lane(opt, i, j, k);
+                    opt_right_rolling[k] = opt;
+                }
+            }
         }
-    }
     }
 #endif
 
-    // Extract per-lane anchor trackers from the physical SIMD layout.
+    // Extract per-lane anchor trackers from the physical layout.
+    // best_wMid_phys holds static-scale-unit pairs: compare exactly, then
+    // materialize doubles only for reporting.
     for (int idx = 0; idx < activeCount; idx++) {
         int len = (int)decoded[idx]->size();
         for (int j = 0; j < scratch.active_dp_width && j < len; j++) {
-            Float wMid_k = scratch.best_wMid_phys[j][idx];
-            if (wMid_k > scratch.best_wMid[idx][j]) {
+            const ExpScore &wMid_k = scratch.best_wMid_phys[j][idx];
+            if (expLess(scratch.best_wMid[idx][j], wMid_k)) {
                 scratch.best_wMid[idx][j] = wMid_k;
-                scratch.best_wEnd[idx][j] = scratch.best_wEnd_phys[j][idx];
-                scratch.best_i[idx][j] = (int)scratch.best_i_phys[j][idx];
+                scratch.best_i[idx][j] = scratch.best_i_phys[j][idx];
             }
         }
     }
@@ -1528,18 +1616,18 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
     for (int idx = 0; idx < activeCount; idx++) {
         int len = (int)decoded[idx]->size();
 
-        scratch.opt_profile_position[idx].assign(len, AlignedSimilarity(-INFINITY));
+        scratch.opt_profile_position[idx].assign(len, AlignedSimilarity{-INFINITY, 0, 0, {}});
 
-        Float best_overall = -INFINITY;
+        double best_overall = -INFINITY;
         for (int j = 0; j < len; j++) {
-            Float best_prob = scratch.best_wMid[idx][j];
-            if (best_prob > -INFINITY) {
-                best_overall = std::max(best_overall, best_prob);
+            const ExpScore &best_pair = scratch.best_wMid[idx][j];
+            if (best_pair.m != 0.0) {
+                double best_prob = expToDouble(best_pair);
+                if (best_prob > best_overall) best_overall = best_prob;
                 scratch.opt_profile_position[idx][j] = {
-                    best_prob,
+                    expToLog(best_pair),
                     scratch.best_i[idx][j],
-                    j,
-                    (Float)scratch.best_wEnd[idx][j]
+                    j
                 };
             }
         }
@@ -1551,18 +1639,20 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
                 std::ranges::sort(scratch.opt_profile_position[idx], std::greater<>());
                 auto &aligned = scratch.aligned;
                 aligned[idx].assign(decoded[idx]->size() + 0, false);
+                // Placeholders stay at -INFINITY; the > -INFINITY guard keeps
+                // them out even when minProbRatio == 0 (log(0) = -inf).
+                const double logMin = minProbRatio[idx] > 0
+                    ? std::log((double)minProbRatio[idx]) : -INFINITY;
 
                 for (auto &aligned_similarity : scratch.opt_profile_position[idx]) {
                     int logical_j = aligned_similarity.anchor2;
 
-                    if (aligned_similarity.probRatio >= minProbRatio[idx] &&
+                    if (aligned_similarity.logProbRatio > -INFINITY &&
+                        aligned_similarity.logProbRatio >= logMin &&
                         !aligned[idx][logical_j]) {
-
                         addMidAnchored(idx, profile.length, similarities[idx], aligned_similarity.anchor1,
                                        aligned_similarity.anchor2,
-                                       aligned_similarity.probRatio * scale /
-                                           aligned_similarity.wEndAnchored,
-                                       aligned_similarity.wEndAnchored, scratch);
+                                       aligned_similarity.logProbRatio, scratch);
                         auto &x = similarities[idx].back();
                         finishMidAnchored(idx, x, scratch);
 
@@ -1588,9 +1678,8 @@ void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &sim
         } else {
             auto sel = *std::max_element(scratch.opt_profile_position[idx].begin(), scratch.opt_profile_position[idx].end());
             AlignedSimilarity b = sel;
-            b.probRatio = 0;
+            b.logProbRatio = -INFINITY;
             similarities[idx].push_back(b);
-            b.probRatio = 0;
             similarities[idx].push_back(b);
             similarities[idx].push_back(sel);
         }
@@ -1830,7 +1919,7 @@ void findFinalSimilarities(std::vector<FinalSimilarity> &similarities, std::arra
     const char *profileSeq = charVec + profile.consensusSequenceIdx;
 
     std::array<std::vector<AlignedSimilarity>, simdWidth> sims;
-    std::array<std::vector<uint8_t>*, simdWidth> decoded;
+    std::array<std::vector<uint8_t>*, simdWidth> decoded{};
     std::array<Float, simdWidth> minProbRatio;
     for (int i = 0; i < activeCount; i++) {
         decoded[i] = &req[i].seqData->decoded;
@@ -1849,7 +1938,7 @@ void findFinalSimilarities(std::vector<FinalSimilarity> &similarities, std::arra
                            // is not a valid MAF record
             }
             int anchor2 = contigToSequencePos(req[idx].seqData->contig, req[idx].seqData->strandNum, x.anchor2);
-            FinalSimilarity s = {x.probRatio, profileNum, req[idx].seqData->strandNum, x.anchor1,
+            FinalSimilarity s = {x.logProbRatio, profileNum, req[idx].seqData->strandNum, x.anchor1,
                                  anchor2,     x.anchor1,  anchor2};
             if (!x.alignment.empty()) {
                 s.start1 = x.alignment[0].start1;
@@ -1925,7 +2014,8 @@ void findFinalSimilaritiesBatched(std::vector<FinalSimilarity> &similarities,
                                 std::cout << s.str();
                             }
 
-                            if (evalue <= forward_only_evalue) {
+                            bool infScore = !std::isfinite(log_probRatio);
+                            if (evalue <= forward_only_evalue || infScore) {
                                 forward_only_job_results[jobIdx].push_back(requests[job.startRequestIdx + k]);
                             }
                         }
@@ -2123,8 +2213,6 @@ void estimateGumbel(double &mmLambda, double &mmK, double &mmKsimple, double &ml
     maximumLikelihoodGumbel(mlLambda, mlK, mlKsimple, scores, n, seqLength);
     methodOfLmomentsGumbel(lmLambda, lmK, scores, n, seqLength);
 }
-
-static std::mutex g_cout_mutex;
 
 class Hash128 {
 public:
@@ -2506,29 +2594,30 @@ void estimateK(Profile &profile, const Float *letterFreqs, char *sequence, int s
                     std::array<Float, simdWidth> minProbRatio;
                     minProbRatio.fill(-2.0f);
                     std::array<std::vector<AlignedSimilarity>, simdWidth> simsSIMD;
-                    simd_t bwdBest = simd_t(0.0);
+                    std::array<ExpScore, simdWidth> bwdBest{};
+                    // Calibration only needs scores (end/beg/mid + forward-only);
+                    // alignments are never consumed here, so skip the ExpMatrix.
                     findSimilarities(simsSIMD, profile, decodedPtrs, minProbRatio, threadScratch, activeCount,
-                                     &bwdBest);
-                    alignas(64) Float bwdBestArr[simdWidth];
-                    simd_unchecked_store(bwdBest, bwdBestArr, Kokkos::Experimental::simd_flag_default);
+                                     &bwdBest, /*needAlign=*/false);
 
                     for (int lane = 0; lane < activeCount; ++lane) {
                         int trialIdx = start + lane;
                         const auto &sims = simsSIMD[lane];
-                        endScores[trialIdx] = log(sims[0].probRatio);
-                        begScores[trialIdx] = log(sims[1].probRatio);
-                        midScores[trialIdx] = log(sims[2].probRatio);
+                        endScores[trialIdx] = sims[0].logProbRatio;
+                        begScores[trialIdx] = sims[1].logProbRatio;
+                        midScores[trialIdx] = sims[2].logProbRatio;
 #ifdef FORWARD_ONLY_FILTER
-                        fwdOnlyScores[trialIdx] = log((double)bwdBestArr[lane]);
+                        fwdOnlyScores[trialIdx] = expToLog(bwdBest[lane]);
 #endif
 
                         if (printVerbosity > 1) {
                             std::lock_guard<std::mutex> lock(g_cout_mutex);
                             std::cout << (trialIdx + 1) << "\t" << sims[0].anchor1 << "\t" << sims[0].anchor2 << "\t"
-                                      << log(sims[0].probRatio) + shift << "\t" << sims[1].anchor1 << "\t"
-                                      << sims[1].anchor2 << "\t" << log(sims[1].probRatio) + shift << "\t"
+                                      << scoreStr(sims[0].logProbRatio + shift) << "\t"
+                                      << sims[1].anchor1 << "\t" << sims[1].anchor2 << "\t"
+                                      << scoreStr(sims[1].logProbRatio + shift) << "\t"
                                       << sims[2].anchor1 << "\t" << sims[2].anchor2 << "\t"
-                                      << log(sims[2].probRatio) + shift << std::endl;
+                                      << scoreStr(sims[2].logProbRatio + shift) << std::endl;
                         }
                     }
                 }
@@ -2548,14 +2637,14 @@ void estimateK(Profile &profile, const Float *letterFreqs, char *sequence, int s
         if (scoresFile && scoresFile->is_open()) {
             for (int trial = 0; trial < numOfSequences; ++trial) {
                 (*scoresFile) << "forward-backward" << "\t" << profile.name << "\t" << trial + 1 << "\tend\t"
-                              << endScores[trial] + shift << "\n";
+                              << scoreStr(endScores[trial] + shift) << "\n";
                 (*scoresFile) << "forward-backward" << "\t" << profile.name << "\t" << trial + 1 << "\tstart\t"
-                              << begScores[trial] + shift << "\n";
+                              << scoreStr(begScores[trial] + shift) << "\n";
                 (*scoresFile) << "forward-backward" << "\t" << profile.name << "\t" << trial + 1 << "\tmid\t"
-                              << midScores[trial] + shift << "\n";
+                              << scoreStr(midScores[trial] + shift) << "\n";
 #ifdef FORWARD_ONLY_FILTER
                 (*scoresFile) << "forward-only" << "\t" << profile.name << "\t" << trial + 1 << "\tall\t"
-                              << fwdOnlyScores[trial] + shift << "\n";
+                              << scoreStr(fwdOnlyScores[trial] + shift) << "\n";
 #endif
             }
         }
@@ -3502,7 +3591,7 @@ Forward-only pre-filter options:\n\
                    : (i % 3 == 0)  ? p.gumbelKendAnchored
                    : (i % 3 == 1)  ? p.gumbelKbegAnchored
                                    : p.gumbelKmidAnchored;
-        double evalue = k * totSequenceLength / pow(similarities[i].probRatio, p.lambda);
+        double evalue = k * totSequenceLength * std::exp(-p.lambda * similarities[i].logProbRatio);
         if (evalueOpt <= 0 && i % 3 == 0)
             std::cout << "\n";
         if (evalueOpt > 0 && evalue > evalueOpt)

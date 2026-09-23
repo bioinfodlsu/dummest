@@ -4,7 +4,7 @@ project(SeqPositionProbs CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-add_compile_options(-Wall -march=native -ffast-math)
+add_compile_options(-Wall -march=native -fno-math-errno -fno-trapping-math)
 add_compile_options(
         $<$<CONFIG:Debug>:-fsanitize=address,undefined>
         $<$<CONFIG:Debug>:-fno-omit-frame-pointer>
