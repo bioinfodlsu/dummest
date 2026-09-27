@@ -96,3 +96,12 @@ http-client.private.env.json
 
 # Github Copilot persisted session migrations, see: https://github.com/microsoft/copilot-intellij-feedback/issues/712#issuecomment-3322062215
 .idea/**/copilot.data.migration.*.xml
+# Local (non-canonical) build trees
+build*/
+# Python bytecode from pipeline runs
+__pycache__/
+*.pyc
+# Regenerable samtools index
+*.fai
+# Local profiler outputs
+perf.data*
