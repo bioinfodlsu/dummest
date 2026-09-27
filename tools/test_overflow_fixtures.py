@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Deterministic fixtures for test_rescale.sh.
+"""Deterministic fixtures for test_overflow.sh.
 
-Usage: test_rescale_fixtures.py <fixdir>
+Usage: test_overflow_fixtures.py <fixdir>
 
 Reads transmark-full.AA.hmm from the current directory and writes:
   <fixdir>/herpes.hmm, <fixdir>/herpes.fa  -- a 1359-codon profile and a

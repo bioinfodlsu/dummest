@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Assertion checker for test_rescale.sh output.
+"""Assertion checker for test_overflow.sh output.
 
-Usage: test_rescale_check.py FILE EXP_SCORE TOL EXP_E EXP_ANCHOR EXP_SPANS FP_EVALUE
+Usage: test_overflow_check.py FILE EXP_SCORE TOL EXP_E EXP_ANCHOR EXP_SPANS FP_EVALUE
 
 Fingerprints the true (top) hit against the expected score/E/anchor/spans,
 requires that true hit to be significant (E < FP_EVALUE), and flags any other
@@ -45,7 +45,11 @@ def main():
         print(f"FAIL {path}: no hits")
         sys.exit(1)
 
-    top = recs[0]
+    # Output order is nondeterministic (batches print as they finish, and the
+    # Slow second wave prints after the fast wave), so the true hit is the
+    # top scorer, not recs[0].
+    top = max(recs, key=lambda r: float(r["score"]))
+    rest = [r for r in recs if r is not top]
     problems = []
 
     if abs(float(top["score"]) - exp_score) > tol:
@@ -61,7 +65,7 @@ def main():
     if not e2f(top["e"]) < fp:
         problems.append(f"true-hit E {top['e']} not significant (<{fp:g})")
 
-    false_hits = [(r["anchor"], r["e"]) for r in recs[1:] if e2f(r["e"]) < fp]
+    false_hits = [(r["anchor"], r["e"]) for r in rest if e2f(r["e"]) < fp]
     if false_hits:
         problems.append(f"significant false hits (<{fp:g}): {false_hits}")
 

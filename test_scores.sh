@@ -45,6 +45,6 @@ plot_anchor() {
 }
 
 for anchor in end start mid; do
-    plot_anchor forward-backward "$anchor" "forward_backward_${anchor}" "Forward-backward ${anchor} scores"
+    plot_anchor full "$anchor" "full_${anchor}" "Full ${anchor} scores"
 done
-plot_anchor forward-only all "forward_only_all" "Forward-only scores"
+plot_anchor filter all "filter_all" "Filter scores"
