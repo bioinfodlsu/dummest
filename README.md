@@ -10,8 +10,8 @@ profile HMMs allowing for frameshifts.
 
 Clone the repository and initialize its submodules:
 
-    git clone https://github.com/3liteking148/seq-position-probs.git
-    cd seq-position-probs
+    git clone https://github.com/bioinfodlsu/dummest.git
+    cd dummest
     git submodule update --init --recursive
 
 Build the C++ programs with CMake:
