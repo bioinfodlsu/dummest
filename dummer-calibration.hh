@@ -507,11 +507,11 @@ void estimateK(Profile &profile, const Float *letterFreqs, char *sequence, int s
                         if (printVerbosity > 1) {
                             std::lock_guard<std::mutex> lock(g_cout_mutex);
                             std::cout << (trialIdx + 1) << "\t" << sims[0].anchor1 << "\t" << sims[0].anchor2 << "\t"
-                                      << scoreStr(sims[0].logProbRatio + shift) << "\t"
+                                      << scoreStr(natsToLog2(sims[0].logProbRatio)) << "\t"
                                       << sims[1].anchor1 << "\t" << sims[1].anchor2 << "\t"
-                                      << scoreStr(sims[1].logProbRatio + shift) << "\t"
+                                      << scoreStr(natsToLog2(sims[1].logProbRatio)) << "\t"
                                       << sims[2].anchor1 << "\t" << sims[2].anchor2 << "\t"
-                                      << scoreStr(sims[2].logProbRatio + shift) << std::endl;
+                                      << scoreStr(natsToLog2(sims[2].logProbRatio)) << std::endl;
                         }
                     }
                 }
@@ -531,14 +531,14 @@ void estimateK(Profile &profile, const Float *letterFreqs, char *sequence, int s
         if (scoresFile && scoresFile->is_open()) {
             for (int trial = 0; trial < numOfSequences; ++trial) {
                 (*scoresFile) << "full" << "\t" << profile.name << "\t" << trial + 1 << "\tend\t"
-                              << scoreStr(endScores[trial] + shift) << "\n";
+                              << scoreStr(natsToLog2(endScores[trial])) << "\n";
                 (*scoresFile) << "full" << "\t" << profile.name << "\t" << trial + 1 << "\tstart\t"
-                              << scoreStr(begScores[trial] + shift) << "\n";
+                              << scoreStr(natsToLog2(begScores[trial])) << "\n";
                 (*scoresFile) << "full" << "\t" << profile.name << "\t" << trial + 1 << "\tmid\t"
-                              << scoreStr(midScores[trial] + shift) << "\n";
+                              << scoreStr(natsToLog2(midScores[trial])) << "\n";
 #ifdef FILTER_PASS
                 (*scoresFile) << "filter" << "\t" << profile.name << "\t" << trial + 1 << "\tall\t"
-                              << scoreStr(fltOnlyScores[trial] + shift) << "\n";
+                              << scoreStr(natsToLog2(fltOnlyScores[trial])) << "\n";
 #endif
             }
         }

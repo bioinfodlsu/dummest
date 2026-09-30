@@ -92,7 +92,7 @@ void printSimilarity(std::ostream &os, const char *names, const Profile &p, Sequ
     int w2 = std::max(numOfDigits(sim.start1), numOfDigits(start2));
     int w3 = std::max(numOfDigits(span1), numOfDigits(span2));
     int w4 = std::max(numOfDigits(p.length), numOfDigits(reportSeqLength));
-    os << "a score=" << scoreStr(sim.logProbRatio + shift) << " E=" << evalue
+    os << "a score=" << scoreStr(natsToLog2(sim.logProbRatio)) << " E=" << evalue
        << " anchor=" << sim.anchor1 << "," << anchor2 << "\n";
     os << "s " << std::left << std::setw(w1) << names + p.nameIdx << " " << std::right
        << std::setw(w2) << sim.start1 << " " << std::setw(w3) << span1 << " " << '+' << " "

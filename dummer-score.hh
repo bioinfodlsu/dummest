@@ -30,9 +30,9 @@
 #include <immintrin.h>
 #endif
 
-// Static downscale applied to the DP: 2^-63, undone in combined scores by
-// mulScoresStaticShifted.
-constexpr int STATIC_SHIFT = 63;
+// Static downscale applied to the DP: none (1.0), combined scores use
+// mulScoresStaticShifted with zero shift (plain product).
+constexpr int STATIC_SHIFT = 0;
 
 // A non-negative score as (mantissa, exponent): value = m * 2^e with
 // m in [0.5, 1) or m == 0 meaning zero. Eight bytes so matrices stay small.

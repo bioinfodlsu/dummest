@@ -189,9 +189,15 @@ private:
 // anchor coordinates are closer than this, omit the lower-scoring one.
 const int minSeparation = 32; // xxx ???
 
-// down-scale probabilities by this amount, to delay overflow:
-const Float scale = 1.0 / (1 << 30) / (1 << 30) / (1 << 3); // sqrt[min normal float]
-const int shift = STATIC_SHIFT; // add this to scores, to undo the scaling
+// scale needs to be 1 for now, due to risk of null-related underflow in DUMMEST
+// and traceback that doesnt account for scaling
+const Float scale = 1.0;
+const int shift = STATIC_SHIFT;
+
+inline double natsToLog2(double ln) {
+    static const double kLn2 = 0.6931471805599453;
+    return ln / kLn2;
+}
 
 int verbosity = 0;
 

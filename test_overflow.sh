@@ -50,10 +50,10 @@ python3 tools/test_overflow_fixtures.py "$FIXDIR"
 # --- cases -------------------------------------------------------------------
 # name | bin | cpus | fa | expected score | tol | E regex | anchor | spans
 CASES=(
- "herpes_D|$DUMMER_BIN|$NPROC|$FIXDIR/herpes.fa|1570|6|0|981,5942|TRAIN.Herpes_MCP,1,1358,+;herpes0,3003,4072,+"
- "medium_D|$DUMMER_BIN|$NPROC|$FIXDIR/medium.fa|539|1|9\\..*e-216|531,2302|TRAIN.Herpes_MCP,426,506,+;medium0,1988,1516,+"
- "herpes_L|$DUMMERL_BIN|$NPROC|$FIXDIR/herpes.fa|1569|6|0|-|TRAIN.Herpes_MCP,1,1358,+;herpes0,3003,4072,+"
- "medium_L|$DUMMERL_BIN|$NPROC|$FIXDIR/medium.fa|539|1|9\\..*e-216|-|TRAIN.Herpes_MCP,426,506,+;medium0,1988,1516,+"
+ "herpes_D|$DUMMER_BIN|$NPROC|$FIXDIR/herpes.fa|2235.42|6|0|981,5942|TRAIN.Herpes_MCP,1,1358,+;herpes0,3003,4072,+"
+ "medium_D|$DUMMER_BIN|$NPROC|$FIXDIR/medium.fa|749.37|1|9\\..*e-216|531,2302|TRAIN.Herpes_MCP,426,506,+;medium0,1988,1516,+"
+ "herpes_L|$DUMMERL_BIN|$NPROC|$FIXDIR/herpes.fa|2235.42|6|0|-|TRAIN.Herpes_MCP,1,1358,+;herpes0,3003,4072,+"
+ "medium_L|$DUMMERL_BIN|$NPROC|$FIXDIR/medium.fa|749.37|1|9\\..*e-216|-|TRAIN.Herpes_MCP,426,506,+;medium0,1988,1516,+"
 )
 
 for spec in "${CASES[@]}"; do
