@@ -1,5 +1,6 @@
 // Author: Martin C. Frith 2025
 // SPDX-License-Identifier: BSD-3-Clause
+#pragma once
 
 // Look, it's 2025 and we still can't have good, easy, portable SIMD?
 // So write hardware-specific SIMD, like an animal

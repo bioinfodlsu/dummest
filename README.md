@@ -120,7 +120,7 @@ Other supported pipeline options include:
 * `--prefilter-mode 3`: use MMseqs2's GPU combined ungapped and gapped
   prefilter mode.
 * `--no-gpu`: run MMseqs2 on CPU only (passes `--gpu 0` to `createdb` and `search`); it cannot be combined with `--prefilter-mode 3`.
-* `--prefilter-pvalue F` (default: `0.1`): MMseqs2 prefilter p-value.
+* `--prefilter-pvalue F` (default: `0.005`): MMseqs2 prefilter p-value.
   The pipeline passes `-e <nseq*6*F>` to `mmseqs search`, where `nseq`
   is the number of genome entries. Ignored in `--max` mode, which
   skips MMseqs2.
@@ -129,7 +129,7 @@ Other supported pipeline options include:
   the prefilter. Passed as `--max-seqs` to `mmseqs search`. Ignored in
   `--max` mode, which skips MMseqs2.
 * `--evalue F` (default: `10`): DUMMER *E*-value threshold. The pipeline
-  forwards it as both `-e` and `-W` to DUMMER, so the forward-only
+  forwards it as both `-e` and `-W` to DUMMER, so the filter pass
   pre-filter uses the same *E*-value threshold as final scoring.
 * `--insert1/--insert2/--delete1/--delete2`, `--stop-codon-prob`,
   `--bg-stop-codon-prob`, `--tantan-threshold`: forwarded to DUMMER
@@ -171,7 +171,7 @@ Get similarities with *E*-value at most (say) 0.01:
 
     dummer -e0.01 profiles.hmm sequences.fasta
 
-The forward-only pre-filter uses the same *E*-value threshold by default.
+The filter pass uses the same *E*-value threshold by default.
 Override it separately with `-W` (e.g. `-e0.01 -W1`), or bypass the
 pre-filter entirely with `--max`. With `-e0`, the pre-filter passes nothing
 unless `--max` is given.
@@ -329,7 +329,7 @@ You can omit this step:
   provisional one- and two-nucleotide frameshift transitions.  They can
   therefore be slow and memory-consuming.
 
-* The current build applies a forward-only pre-filter before final scoring,
+* The current build applies a filter pass before final scoring,
   using the same *E*-value threshold as final scoring (`-W` defaults to the
   `-e` value; `--max` bypasses it). The final alignment still
   integrates evidence from alternative alignment paths.

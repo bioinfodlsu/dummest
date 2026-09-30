@@ -47,8 +47,8 @@ def main():
                              "prefilter, applies --ungapped-pvalue).")
     parser.add_argument("--no-gpu", action="store_true",
                         help="Run MMseqs2 on CPU only (passes --gpu 0 to createdb and search instead of --gpu 1).")
-    parser.add_argument("--prefilter-pvalue", dest="prefilter_pvalue", type=float, default=0.02,
-                         help="MMseqs2 prefilter p-value (default: 0.02). "
+    parser.add_argument("--prefilter-pvalue", dest="prefilter_pvalue", type=float, default=0.005,
+                         help="MMseqs2 prefilter p-value (default: 0.005). "
                               "Passed as -e <nseq*6*pvalue> to 'mmseqs search'. "
                               "Ignored in --max mode, which skips MMseqs2.")
     parser.add_argument("--ungapped-pvalue", dest="ungapped_pvalue", type=float, default=0.02,
@@ -88,9 +88,12 @@ def main():
                         help="DUMMER tantan masking threshold (default: dummer default 0.5)")
     parser.add_argument("--evalue", "-e", dest="evalue", type=float, default=10,
                         help="DUMMER E-value threshold (default: 10). Forwarded as both -e and -W to dummer.")
-    parser.add_argument("--batch", dest="batch", type=int, default=None,
+    parser.add_argument("--batch", dest="batch", type=int, default=800000,
                         help="DUMMER stream chunk size in sequences (default: threads * 10000). "
                              "Small values force multi-chunk streaming.")
+    parser.add_argument("--trials", dest="trials", type=int, default=None,
+                        help="DUMMER calibration random sequences (-t). "
+                             "Default: dummer default (1000).")
 
     args = parser.parse_args()
 
@@ -111,10 +114,14 @@ def main():
         parser.error("--evalue must be >= 0")
     if args.batch is not None and args.batch < 1:
         parser.error("--batch must be >= 1")
+    if args.trials is not None and args.trials < 1:
+        parser.error("--trials must be >= 1")
 
     dummer_extra_args = []
     if args.batch is not None:
         dummer_extra_args += ["--batch", str(args.batch)]
+    if args.trials is not None:
+        dummer_extra_args += ["-t", str(args.trials)]
     if args.insert1 is not None:
         dummer_extra_args += ["--insert1", str(args.insert1)]
     if args.insert2 is not None:
