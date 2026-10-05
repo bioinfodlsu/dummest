@@ -1,5 +1,4 @@
 import sys
-import os
 import argparse
 import numpy as np
 import matplotlib
@@ -51,11 +50,11 @@ def fit_distribution(x, name):
     }
 
 
-def plot_survival(ax, data, dist_name):
+def plot_survival(ax, data, dist_name, xlabel):
     frozen = data["frozen"]
     ax.plot(data["x_sorted"], data["surv_emp"], marker=".", linestyle="none", label="observed")
     ax.plot(data["xs"], frozen.sf(data["xs"]), linewidth=2, label="expected")
-    ax.set_xlabel("similarity score")
+    ax.set_xlabel(xlabel)
     ax.set_ylabel("cumulative frequency")
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, pos: f"{v * data['n']:.0f}"))
     ax.legend()
@@ -79,43 +78,79 @@ def plot_survival(ax, data, dist_name):
     # ax.set_title("Q-Q plot")
 
 
+FB_XLABEL = "Forward-backward score"
+F_XLABEL = "Backward score"
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Fit Gumbel/GEV to scores; one score file per family (label = basename). "
-                    "With no files, reads numbers from stdin.",
+        description="Fit Gumbel/GEV to full-mid (Forward-backward) and filter-all (Backward) "
+                    "scores; one --input per family, all families in a single figure.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("score_files", nargs="*", help="Score files, one per family (up to 3 families per figure)")
-    parser.add_argument("--title", type=str, default="Score distribution", help="Plot title")
+    parser.add_argument("--input", dest="inputs", action="append", default=[], metavar="LABEL:FULL:FILTER",
+                        help="One per family: label plus full-mid and filter-all score files "
+                             "(empty path = missing side). Repeat for each family.")
     parser.add_argument("--fit", type=str, choices=sorted(DISTS), default="gumbel", help="Distribution to fit")
     parser.add_argument("--output", type=str, default=None, help="Output PNG path")
     args = parser.parse_args()
 
-    if args.score_files:
-        families = []
-        for path in args.score_files:
-            x = read_numbers(path)
-            if x.size < 5:
-                print(f"# Skipping {path}: only {x.size} finite data points")
-                continue
-            label = os.path.splitext(os.path.basename(path))[0]
-            families.append((label, x))
-        if not families:
-            sys.exit(1)
-    else:
-        x = read_numbers(None)
-        families = [("stdin", x)]
+    if not args.inputs:
+        parser.error("at least one --input LABEL:FULL:FILTER is required")
 
-    fitted = [(label, fit_distribution(x, args.fit)) for label, x in families]
+    families = []
+    for spec in args.inputs:
+        if spec.count(":") < 2:
+            parser.error(f"bad --input {spec!r}: expected LABEL:FULL:FILTER")
+        label, full_path, filter_path = spec.split(":", 2)
+        if not label:
+            parser.error(f"bad --input {spec!r}: empty label")
+        x_full = read_numbers(full_path) if full_path else np.asarray([], dtype=float)
+        x_filter = read_numbers(filter_path) if filter_path else np.asarray([], dtype=float)
+        has_full = x_full.size >= 5
+        has_filter = x_filter.size >= 5
+        if not has_full and not has_filter:
+            print(f"# Skipping {label}: only {x_full.size} full and {x_filter.size} filter finite data points")
+            continue
+        if not has_full:
+            print(f"# {label}: only {x_full.size} full finite data points (panel left empty)")
+            x_full = None
+        if not has_filter:
+            print(f"# {label}: only {x_filter.size} filter finite data points (panel left empty)")
+            x_filter = None
+        families.append((label, x_full, x_filter))
+    if not families:
+        sys.exit(1)
 
-    n_fams = len(families)
-    fig, axes = plt.subplots(n_fams, 1, sharex=True, figsize=(5, 5 * n_fams), squeeze=False)
-    for ax, (label, data) in zip(axes[:, 0], fitted):
-        plot_survival(ax, data, args.fit)
-        ax.set_title(f"{label}\n{data['param_str']}")
-        print(f"Fitted {args.fit} ({label}): {data['param_str']}")
+    fitted = [(label,
+               fit_distribution(x_full, args.fit) if x_full is not None else None,
+               fit_distribution(x_filter, args.fit) if x_filter is not None else None)
+              for label, x_full, x_filter in families]
 
-    fig.suptitle(f"{args.title} ({args.fit} fit)")
+    n_fams = len(fitted)
+    fig, axes = plt.subplots(n_fams, 2, sharex="col", sharey=False,
+                             figsize=(10, 5 * n_fams), squeeze=False)
+    for row, (label, full_data, filter_data) in enumerate(fitted):
+        ax_l, ax_r = axes[row, 0], axes[row, 1]
+        if full_data is not None:
+            plot_survival(ax_l, full_data, args.fit, FB_XLABEL)
+            ax_l.set_title(f"{label} (Forward-backward)\n{full_data['param_str']}")
+            print(f"Fitted {args.fit} ({label} full): {full_data['param_str']}")
+        else:
+            ax_l.set_xlabel(FB_XLABEL)
+            ax_l.set_ylabel("cumulative frequency")
+            ax_l.text(0.5, 0.5, "no data", ha="center", va="center", transform=ax_l.transAxes)
+            ax_l.set_title(f"{label} (Forward-backward)")
+        if filter_data is not None:
+            plot_survival(ax_r, filter_data, args.fit, F_XLABEL)
+            ax_r.set_title(f"{label} (Backward)\n{filter_data['param_str']}")
+            print(f"Fitted {args.fit} ({label} filter): {filter_data['param_str']}")
+        else:
+            ax_r.set_xlabel(F_XLABEL)
+            ax_r.set_ylabel("cumulative frequency")
+            ax_r.text(0.5, 0.5, "no data", ha="center", va="center", transform=ax_r.transAxes)
+            ax_r.set_title(f"{label} (Backward)")
+
     fig.tight_layout()
 
     if args.output:
