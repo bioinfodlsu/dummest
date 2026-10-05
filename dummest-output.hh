@@ -49,7 +49,7 @@ int strandPosition(size_t strandNum, int seqLength, int position) {
     return (strandNum % 2) ? seqLength - position : position;
 }
 // Decimal display for log-scores: fixed notation (never scientific) with
-// trailing zeros trimmed; non-finite stays "-inf" so test_scores.sh
+// trailing zeros trimmed; non-finite stays "-inf" so tools/test_scores.sh
 // awk '$5!="-inf"' keeps working. Computation stays in double.
 inline std::string scoreStr(double v) {
     if (v == 0.0) v = 0.0; // normalize -0.0
