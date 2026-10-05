@@ -139,7 +139,6 @@ Filter pass options:\n\
                                     {"batch", required_argument, 0, OPT_BATCH_CODE},
 #ifdef FILTER_PASS
                                      {"filter-evalue", required_argument, 0, 'W'},
-                                     {"forward-only-evalue", required_argument, 0, 'W'}, // compat alias
 #endif
                                      {"scores-file", required_argument, 0, 'S'},
                                      {"warmup", no_argument, 0, OPT_WARMUP_CODE},
