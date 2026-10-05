@@ -104,9 +104,12 @@ def main():
     parser.add_argument("--gpu", choices=["auto", "on", "off"], default="auto",
                         help="MMseqs2 GPU use: auto (default; GPU when nvidia-smi "
                              "reports one, else CPU), on (fail if no GPU), off (CPU only).")
-    parser.add_argument("--prefilter-pvalue", dest="prefilter_pvalue", type=float, default=0.005,
-                         help="MMseqs2 prefilter p-value (default: 0.005). "
-                              "Passed as -e <nseq*6*pvalue> to 'mmseqs search'. "
+    parser.add_argument("--gapped-evalue", dest="gapped_evalue", type=float, default=0.005,
+                         help="E-value threshold for the gapped (Smith-Waterman) alignment, "
+                              "stage 2 of the MMseqs2 search (default: 0.005). Stage 1 is "
+                              "the ungapped prefilter, gated by --ungapped-pvalue. "
+                              "Passed as -e <nseq*6*evalue> to 'mmseqs search', where nseq "
+                              "is the number of genome entries (six reading frames each). "
                               "Ignored in --max mode, which skips MMseqs2.")
     parser.add_argument("--ungapped-pvalue", dest="ungapped_pvalue", type=float, default=0.02,
                         help="Max per-pair ungapped p-value for the prefilter stage (default: 0.02). "
@@ -146,7 +149,7 @@ def main():
     parser.add_argument("--evalue", "-e", dest="evalue", type=float, default=10,
                         help="DUMMEST E-value threshold (default: 10). Forwarded as both -e and -W to dummest.")
     parser.add_argument("--batch", dest="batch", type=int, default=800000,
-                        help="DUMMEST stream chunk size in sequences (default: threads * 10000). "
+                        help="DUMMEST stream chunk size in sequences (default: 800000). "
                              "Small values force multi-chunk streaming.")
     parser.add_argument("--trials", dest="trials", type=int, default=None,
                         help="DUMMEST calibration random sequences (-t). "
@@ -154,8 +157,8 @@ def main():
 
     args = parser.parse_args()
 
-    if args.prefilter_pvalue is None or not args.prefilter_pvalue >= 0:
-        parser.error("--prefilter-pvalue must be >= 0")
+    if args.gapped_evalue is None or not args.gapped_evalue >= 0:
+        parser.error("--gapped-evalue must be >= 0")
     if args.ungapped_pvalue is None or not 0 <= args.ungapped_pvalue <= 1:
         parser.error("--ungapped-pvalue must be in [0, 1]")
     if args.prefilter_max_seqs is None or args.prefilter_max_seqs < 1:
@@ -349,7 +352,7 @@ def main():
             mmseqs_exec, "search", query_db, target_db_pad, ali_file, tmpdir,
             "--gpu", gpu_flag,
             "--threads", cpus,
-            "-e", str(len(dna_seqs) * 6 * args.prefilter_pvalue), # p-value (default 0.01)
+            "-e", str(len(dna_seqs) * 6 * args.gapped_evalue),
             "--max-seqs", str(args.prefilter_max_seqs),
             "--prefilter-mode", str(args.prefilter_mode),
             "--ungapped-pvalue", str(args.ungapped_pvalue),
