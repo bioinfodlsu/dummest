@@ -9,18 +9,26 @@
 # builds. The herpes cases exercise the per-row rescale triggers and
 # cum-folded promotion; the medium cases stay near static scale.
 #
-# Each output is checked by tools/test_overflow_check.py: the true (top) hit is
+# Each output is checked by tests/test_overflow_check.py: the true (top) hit is
 # fingerprinted (score/E/anchor/spans) and must be significant, and no other
 # hit may be significant (E < FP_EVALUE, default 1e-5). Weak chance hits may
 # vary run to run.
 #
-# Fixtures are generated deterministically under $FIXDIR (default
-# /tmp/test_overflow); binaries are rebuilt first. Cold calibration takes a
-# few minutes; warm re-runs are fast.
+# Input fixtures are committed under tests/fixtures; outputs go to $OUTDIR
+# (default /tmp/test_overflow). Binaries are rebuilt first unless
+# DUMMER_BIN/DUMMERL_BIN are preset. Cold calibration takes a few minutes;
+# warm re-runs are fast.
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
-FIXDIR="${TEST_OVERFLOW_TMPDIR:-/tmp/test_overflow}"
+FIXDIR="$PWD/tests/fixtures"
+OUTDIR="${TEST_OVERFLOW_TMPDIR:-/tmp/test_overflow}"
+# When both binaries are supplied (e.g. by the container %test), skip the
+# host build and test those directly.
+SKIP_BUILD=0
+if [[ -n "${DUMMER_BIN:-}" && -n "${DUMMERL_BIN:-}" ]]; then
+    SKIP_BUILD=1
+fi
 BUILD_DIR="${BUILD_DIR:-cmake-build-release}"
 DUMMER_BIN="${DUMMER_BIN:-$BUILD_DIR/dummest}"
 DUMMERL_BIN="${DUMMERL_BIN:-$BUILD_DIR/dummestl}"
@@ -31,21 +39,23 @@ FAIL=0
 log() { echo "==> $*"; }
 
 # --- source + build ----------------------------------------------------------
-if [[ ! -f transmark-full.AA.hmm ]]; then
-    echo "missing transmark-full.AA.hmm in repo root" >&2
+if [[ ! -f "$FIXDIR/herpes.hmm" ]]; then
+    echo "missing fixtures in $FIXDIR" >&2
     exit 1
 fi
-if [[ ! -d "$BUILD_DIR" ]]; then
-    log "configuring $BUILD_DIR"
-    cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
+if [[ $SKIP_BUILD -eq 0 ]]; then
+    if [[ ! -d "$BUILD_DIR" ]]; then
+        log "configuring $BUILD_DIR"
+        cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
+    fi
+    log "building dummest + dummestl"
+    cmake --build "$BUILD_DIR" --target dummest dummestl -j "$(nproc)"
+else
+    log "DUMMER_BIN/DUMMERL_BIN preset; skipping host build"
 fi
-log "building dummer + dummerl"
-cmake --build "$BUILD_DIR" --target dummer dummerl -j "$(nproc)"
 
-# --- fixtures ----------------------------------------------------------------
-mkdir -p "$FIXDIR"
-log "generating fixtures in $FIXDIR"
-python3 tools/test_overflow_fixtures.py "$FIXDIR"
+# --- output dir --------------------------------------------------------------
+mkdir -p "$OUTDIR"
 
 # --- cases -------------------------------------------------------------------
 # name | bin | cpus | fa | expected score | tol | E regex | anchor | spans
@@ -58,11 +68,11 @@ CASES=(
 
 for spec in "${CASES[@]}"; do
     IFS='|' read -r name bin cpus fa score tol eregex anchor spans <<<"$spec"
-    out="$FIXDIR/$name.out"
+    out="$OUTDIR/$name.out"
     log "run $name"
-    python3 bin/pipeline.py "$FIXDIR/herpes.hmm" MET.msa "$fa" "$cpus" \
+    python3 bin/pipeline.py "$FIXDIR/herpes.hmm" samples/MET.msa "$fa" "$cpus" \
         --max --dummest-bin "$bin" >"$out" 2>"$out.err"
-    python3 tools/test_overflow_check.py "$out" "$score" "$tol" "$eregex" "$anchor" "$spans" "$FP_EVALUE" \
+    python3 tests/test_overflow_check.py "$out" "$score" "$tol" "$eregex" "$anchor" "$spans" "$FP_EVALUE" \
         || FAIL=1
 done
 
