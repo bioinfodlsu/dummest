@@ -1,0 +1,85 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%labels
+    Author dummest
+    Version 1.0
+    Description DUMMEST with a custom GPU MMseqs2 fork (GPU ungapped-prefilter p-values)
+
+%help
+    DUMMEST Apptainer container.
+
+    Binaries in PATH: dummest, dummestl, dummest-build, pipeline.py,
+    mmseqs (custom GPU fork), seqkit, bedtools.
+
+    GPU runs (NVIDIA only) need the host driver injected with --nv:
+      apptainer exec --nv dummest.sif pipeline.py profile.hmm profile.msa genome.fa 8
+
+    Inside the container the pipeline always uses /tmp; for large genomes bind
+    a disk directory over it:
+      apptainer exec --bind /host/large_tmp:/tmp dummest.sif pipeline.py ...
+
+    CPU-only smoke test on the bundled fixtures:
+      apptainer exec dummest.sif pipeline.py /opt/dummest/samples/MET-test.hmm \
+          /opt/dummest/samples/MET.msa /opt/dummest/samples/MET-target.fa 4 --batch 1
+
+    Full in-container suite (smoke + overflow; slow on first run):
+      apptainer test dummest.sif
+    Adds CPU-vs-GPU prefilter parity (needs a GPU):
+      apptainer test --nv dummest.sif
+
+    Build with ./build_apptainer.sh (requires MMSEQS_SRC=<MMseqs2 fork tree>).
+
+%environment
+    export LC_ALL=C
+    export PATH=/usr/local/bin:$PATH
+    # Always use /tmp (bind a disk dir over it for large genomes).
+    export DUMMEST_TMP_BYPASS=0
+
+%files
+    .apptainer-stage/dummest /usr/local/bin/dummest
+    .apptainer-stage/dummestl /usr/local/bin/dummestl
+    .apptainer-stage/dummest-build /usr/local/bin/dummest-build
+    .apptainer-stage/pipeline.py /usr/local/bin/pipeline.py
+    .apptainer-stage/mmseqs /usr/local/bin/mmseqs
+    .apptainer-stage/payload /opt/dummest
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        bedtools \
+        seqkit \
+        zlib1g \
+        libbz2-1.0 \
+        libgomp1 \
+        libatomic1
+    rm -rf /var/lib/apt/lists/*
+
+    # Python deps for bin/pipeline.py (numpy arrives via pybedtools).
+    # --break-system-packages is required on Ubuntu 24.04.
+    pip3 install --no-cache-dir --break-system-packages pybedtools
+
+    chmod 755 /usr/local/bin/dummest /usr/local/bin/dummestl /usr/local/bin/dummest-build /usr/local/bin/pipeline.py /usr/local/bin/mmseqs
+
+%runscript
+    exec pipeline.py "$@"
+
+%test
+    set -eux
+    export PATH=/usr/local/bin:$PATH
+    mmseqs version
+    seqkit version
+    bedtools --version
+    dummest --help | head -5
+    # Smoke: full pipeline (MMseqs2 prefilter + dummest) on bundled test data.
+    # GPU is auto-selected when present; plain `apptainer test` uses CPU.
+    pipeline.py /opt/dummest/samples/MET-test.hmm /opt/dummest/samples/MET.msa /opt/dummest/samples/MET-target.fa 2 --batch 1
+    # Overflow/rescale regression on the image's own binaries.
+    DUMMER_BIN=dummest DUMMERL_BIN=dummestl bash /opt/dummest/tests/test_overflow.sh
+    # CPU-vs-GPU prefilter parity; needs `apptainer test --nv`, skips without a GPU.
+    bash /opt/dummest/tests/test_gpu.sh

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import os
+import shutil
 import subprocess
 import tempfile
 import argparse
@@ -50,6 +51,29 @@ def _cache_dir():
     return os.getcwd()
 
 
+def _gpu_available():
+    # True iff an NVIDIA GPU is actually usable: nvidia-smi must both exist
+    # and succeed (in a container without --nv it may exist yet fail).
+    try:
+        r = subprocess.run(["nvidia-smi", "-L"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return False
+    return r.returncode == 0
+
+
+def _resolve_gpu(mode):
+    if mode == "on":
+        return True
+    if mode == "off":
+        return False
+    if _gpu_available():
+        print("# GPU detected (nvidia-smi); using GPU MMseqs2 prefilter")
+        return True
+    print("# No NVIDIA GPU detected; using CPU-only MMseqs2 prefilter")
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Pipeline: HMM-guided genomic search via MMseqs2 + dummest",
@@ -77,8 +101,9 @@ def main():
     parser.add_argument("--prefilter-mode", type=int, default=1, choices=[1],
                         help="MMseqs2 prefilter mode (currently only 1 = ungapped "
                              "prefilter, applies --ungapped-pvalue).")
-    parser.add_argument("--no-gpu", action="store_true",
-                        help="Run MMseqs2 on CPU only (passes --gpu 0 to createdb and search instead of --gpu 1).")
+    parser.add_argument("--gpu", choices=["auto", "on", "off"], default="auto",
+                        help="MMseqs2 GPU use: auto (default; GPU when nvidia-smi "
+                             "reports one, else CPU), on (fail if no GPU), off (CPU only).")
     parser.add_argument("--prefilter-pvalue", dest="prefilter_pvalue", type=float, default=0.005,
                          help="MMseqs2 prefilter p-value (default: 0.005). "
                               "Passed as -e <nseq*6*pvalue> to 'mmseqs search'. "
@@ -273,6 +298,10 @@ def main():
         db_dir = os.path.join(tmpdir, "db")
         os.makedirs(db_dir)
 
+        use_gpu = _resolve_gpu(args.gpu)
+        gpu_flag = "1" if use_gpu else "0"
+        print(f"# MMseqs2 prefilter: {'GPU' if use_gpu else 'CPU-only'} (--gpu {gpu_flag})")
+
         ali_file = os.path.join(db_dir, f"result.ali")
         tmp_file = os.path.join(db_dir, f"tmp")
 
@@ -301,9 +330,6 @@ def main():
                                                     "seqkit seq -m 3 | seqkit translate -f 6 -F")
 
             target_db_pad = os.path.join(db_dir, "targetDB_pad")
-            gpu_flag = "0" if args.no_gpu else "1"
-            if args.no_gpu:
-                print("# Running MMseqs2 in CPU-only mode (--gpu 0)")
             subprocess.run([mmseqs_exec, "createdb", prot_fa_path, target_db_pad, "--gpu", gpu_flag, "--threads", cpus], check=True, stdout=subprocess.DEVNULL)
 
         if args.query_db:
@@ -321,7 +347,7 @@ def main():
         # Final significance is the SW E-value (-e); dummer re-scores windows.
         mmseqs_cmd = [
             mmseqs_exec, "search", query_db, target_db_pad, ali_file, tmpdir,
-            "--gpu", "0" if args.no_gpu else "1",
+            "--gpu", gpu_flag,
             "--threads", cpus,
             "-e", str(len(dna_seqs) * 6 * args.prefilter_pvalue), # p-value (default 0.01)
             "--max-seqs", str(args.prefilter_max_seqs),
@@ -330,7 +356,7 @@ def main():
             "--ungapped-calib", args.ungapped_calib,
             "--alignment-mode", "2",
         ]
-        if args.no_gpu:
+        if not use_gpu:
             mmseqs_cmd.extend(["--spaced-kmer-mode", "0"])
             mmseqs_cmd.extend(["-s", "7.5"])
         if args.ungapped_recalibrate:
@@ -460,7 +486,15 @@ def main():
         raw_fa_path = os.path.join(tmpdir, "raw_ext.fa")
         merged_fa_path = os.path.join(tmpdir, f"debug.fa")
 
-        subprocess.run(["bedtools", "getfasta", "-fi", fa_file, "-bed", merged_bed_path, "-s", "-name+", "-fo", raw_fa_path], check=True)
+        # bedtools writes <fi>.fai next to the input FASTA; if fa_file lives on
+        # a read-only mount (e.g. the Apptainer image), that fails. Symlink it
+        # into the writable tmpdir so the index is created there instead.
+        bedtools_fa = os.path.join(tmpdir, os.path.basename(fa_file))
+        if os.path.lexists(bedtools_fa):
+            os.remove(bedtools_fa)
+        os.symlink(os.path.abspath(fa_file), bedtools_fa)
+
+        subprocess.run(["bedtools", "getfasta", "-fi", bedtools_fa, "-bed", merged_bed_path, "-s", "-name+", "-fo", raw_fa_path], check=True)
 
         with open(raw_fa_path, 'r') as fin, open(merged_fa_path, 'w') as fout:
             for line in fin:
