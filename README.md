@@ -19,32 +19,34 @@ Build the C++ programs with CMake:
     cmake -B build -DCMAKE_BUILD_TYPE=Release
     cmake --build build --parallel
 
-The build copies `dummer`, `dummerl`, and `dummer-build` into `bin/`.
+The build copies `dummest`, `dummestl`, and `dummest-build` into `bin/`.
 For the command examples below, add that directory to your `PATH`:
 
     export PATH="$PWD/bin:$PATH"
 
+Builds target the native host by default (`-march=native`).  For a container
+or another machine, pass `-DDUMMEST_PORTABLE=ON` to build a portable AVX2
+(`x86-64-v3`) baseline instead (requires Haswell/2013+).
 The direct DUMMEST programs require a C++20 compiler and CMake.  The genomic
 filtering pipeline additionally requires:
 
 * Python 3 with the `pybedtools` package.
 * `seqkit` for six-frame translation.
 * `bedtools` for extracting genomic windows.
-* MMseqs2 with GPU support.
-
-Some NVIDIA GPU architectures may require a bug-fixed fork of MMseqs2.  See
-the [MMseqs2 fork](TODO) if the standard build fails or behaves incorrectly
-on the target GPU.
+* MMseqs2 with GPU support: the custom fork with per-profile ungapped-prefilter
+  p-values (`--ungapped-pvalue`/`--ungapped-calib`/`--ungapped-recalibrate`).
+  This is bundled in the container; on the host, build it and point the
+  pipeline at it with `--mmseqs-bin`.
 
 ## Usage
 
 DUMMEST can compare sequences in FASTA format to profiles in HMMER3/f
-format.  You can make profiles with `dummer-build` (new and
+format.  You can make profiles with `dummest-build` (new and
 lightly-tested).  Or you can (ab)use [HMMER][] profiles (whose
 definition doesn't quite fit): you can get DNA profiles from [Dfam][],
 or protein profiles from [Pfam][].  Run it like this:
 
-    dummer profiles.hmm sequences.fasta
+    dummest profiles.hmm sequences.fasta
 
 The output shows similar regions in [MAF][] format:
 
@@ -81,11 +83,14 @@ So, DUMMEST ignores similarity at these positions.
 
 ## Genomic filtering pipeline
 
-`bin/pipeline2.py` is intended for searching nucleotide genomes with protein
+`bin/pipeline.py` is intended for searching nucleotide genomes with protein
 or translated-family profiles.  It accepts an HMM profile, an MSA used to
 construct the MMseqs2 query profile, a nucleotide FASTA file, and a CPU count:
 
-    python3 bin/pipeline2.py profile.hmm profile.msa genome.fa 8 --dummer-bin bin/dummer
+    python3 bin/pipeline.py profile.hmm profile.msa genome.fa 8 --dummest-bin bin/dummest
+
+MMseqs2 is resolved from `--mmseqs-bin`, else `mmseqs` on `PATH`.  Use the
+custom GPU fork (see above) for the `--ungapped-pvalue` prefilter.
 
 The pipeline performs these steps:
 
@@ -98,7 +103,7 @@ The pipeline performs these steps:
 
 The CPU argument controls the MMseqs2 and translation stages.  The pipeline's
 current DUMMEST invocation uses its own configured thread setting, so use
-`dummer --help` and the source defaults when tuning execution on a particular
+`dummest --help` and the source defaults when tuning execution on a particular
 machine.
 
 Use `--max` to disable the MMseqs2 filtering path and run DUMMEST against the
@@ -108,18 +113,25 @@ entries and passes them directly to DUMMEST.  This is useful as a
 maximum-sensitivity comparison, but can require substantially more time and
 memory:
 
-    python3 bin/pipeline2.py profile.hmm profile.msa genome.fa 8 --max --dummer-bin bin/dummer
+    python3 bin/pipeline.py profile.hmm profile.msa genome.fa 8 --max --dummest-bin bin/dummest
 
 Other supported pipeline options include:
 
-* `--skip-dummer`: generate the extracted debug FASTA without running DUMMEST.
+* `--skip-dummest`: generate the extracted debug FASTA without running DUMMEST.
 * `--output-fa FILE`: retain a copy of the extracted debug FASTA.
 * `--target-db-pad PATH`: reuse an existing padded MMseqs2 target database.
 * `--query-db PATH`: reuse an existing MMseqs2 query profile database.
-* `--dummer-bin PATH`: select the DUMMEST executable explicitly.
-* `--prefilter-mode 3`: use MMseqs2's GPU combined ungapped and gapped
-  prefilter mode.
-* `--no-gpu`: run MMseqs2 on CPU only (passes `--gpu 0` to `createdb` and `search`); it cannot be combined with `--prefilter-mode 3`.
+* `--dummest-bin PATH`: select the DUMMEST executable explicitly.
+* `--mmseqs-bin PATH`: select the MMseqs2 binary explicitly (default:
+  `mmseqs` on `PATH`).
+* `--prefilter-mode 1`: MMseqs2 ungapped prefilter (the only mode the custom
+  fork enables; mode 3 is disabled).
+* `--no-gpu`: run MMseqs2 on CPU only (passes `--gpu 0` to `createdb` and `search`).
+* `--ungapped-pvalue F` (default: `0.02`): keep prefilter pairs whose per-profile
+  ungapped p-value is `<= F` (`1.0` disables the gate). Passed to `mmseqs search`.
+* `--ungapped-calib PATH` (default: `~/.cache/dummest/ungappedcalib.tsv`):
+  sidecar cache for the per-profile `(lambda, K)` calibration.
+* `--ungapped-recalibrate`: ignore cache entries and recalibrate every profile.
 * `--prefilter-pvalue F` (default: `0.005`): MMseqs2 prefilter p-value.
   The pipeline passes `-e <nseq*6*F>` to `mmseqs search`, where `nseq`
   is the number of genome entries. Ignored in `--max` mode, which
@@ -128,27 +140,27 @@ Other supported pipeline options include:
   prefilter results per query profile / protein family allowed to pass
   the prefilter. Passed as `--max-seqs` to `mmseqs search`. Ignored in
   `--max` mode, which skips MMseqs2.
-* `--evalue F` (default: `10`): DUMMER *E*-value threshold. The pipeline
-  forwards it as both `-e` and `-W` to DUMMER, so the filter pass
+* `--evalue F` (default: `10`): DUMMEST *E*-value threshold. The pipeline
+  forwards it as both `-e` and `-W` to DUMMEST, so the filter pass
   pre-filter uses the same *E*-value threshold as final scoring.
 * `--insert1/--insert2/--delete1/--delete2`, `--stop-codon-prob`,
-  `--bg-stop-codon-prob`, `--tantan-threshold`: forwarded to DUMMER
-  (see below); unset means use the DUMMER default.
+  `--bg-stop-codon-prob`, `--tantan-threshold`: forwarded to DUMMEST
+  (see below); unset means use the DUMMEST default.
 
 ### Example
 
 The repository's `test.sh` provides a small intended-use example:
 
-    time python3 bin/pipeline2.py MET-test.hmm MET.msa MET-target.fa 16 --max --batch 1
+    time python3 bin/pipeline.py MET-test.hmm MET.msa MET-target.fa 16 --max --batch 1
 
 It searches the included test target with the `MET-test.hmm` profile in
 maximum-sensitivity mode.  It does not exercise the MMseqs2 filtering path;
 remove `--max` to use the normal candidate-filtering workflow.  The pipeline
-defaults to `bin/dummerl`; override with `--dummer-bin bin/dummer`.
+defaults to `bin/dummestl`; override with `--dummest-bin bin/dummest`.
 
 ## Fast, low-memory version
 
-`dummerl` is the pipeline default: it is faster and, with the packed
+`dummestl` is the pipeline default: it is faster and, with the packed
 overflow-proof score representation, uses less memory than the double build,
 but it is more prone to numeric overflow.  (It uses single-precision instead
 of double-precision floating-point numbers.)
@@ -157,11 +169,11 @@ of double-precision floating-point numbers.)
 
 Show all options and default values:
 
-    dummer --help
+    dummest --help
 
 Compare each profile to just the forward strand of each DNA sequence:
 
-    dummer -s1 profiles.hmm sequences.fasta
+    dummest -s1 profiles.hmm sequences.fasta
 
 `-s0` means reverse strands only, `-s1` means forward strands only,
 and `-s2` means both strands (the default).  This is ignored for
@@ -169,7 +181,7 @@ proteins.
 
 Get similarities with *E*-value at most (say) 0.01:
 
-    dummer -e0.01 profiles.hmm sequences.fasta
+    dummest -e0.01 profiles.hmm sequences.fasta
 
 The filter pass uses the same *E*-value threshold by default.
 Override it separately with `-W` (e.g. `-e0.01 -W1`), or bypass the
@@ -178,7 +190,7 @@ unless `--max` is given.
 
 Turn off simple-sequence detection:
 
-    dummer -m0 profiles.hmm sequences.fasta
+    dummest -m0 profiles.hmm sequences.fasta
 
 `-m0` means find simple regions in neither profile nor sequence, `-m1`
 means find them in profiles only, `-m2` means sequences only, and
@@ -186,9 +198,9 @@ means find them in profiles only, `-m2` means sequences only, and
 
 ### Frameshifts, stop codons, and masking thresholds
 
-These DUMMER options override the compiled-in defaults (current
+These DUMMEST options override the compiled-in defaults (current
 defaults in parentheses). They are also accepted by
-`bin/pipeline2.py`, which forwards them to its DUMMER invocation:
+`bin/pipeline.py`, which forwards them to its DUMMEST invocation:
 
 * `--insert1 F` (default: `0.0171`): 1-base insertion rate per base.
 * `--insert2 F` (default: `0.0018`): 2-base insertion rate per base.
@@ -203,11 +215,11 @@ defaults in parentheses). They are also accepted by
 The 1-bp background frameshift branch is `insert1 + delete2` and the
 2-bp branch is `insert2 + delete1`. For example:
 
-    dummer --insert1 0.02 --delete1 0.03 profiles.hmm sequences.fasta
+    dummest --insert1 0.02 --delete1 0.03 profiles.hmm sequences.fasta
 
-    python3 bin/pipeline2.py profile.hmm profile.msa genome.fa 8 --insert1 0.02 --prefilter-pvalue 0.05 --dummer-bin bin/dummer
+    python3 bin/pipeline.py profile.hmm profile.msa genome.fa 8 --insert1 0.02 --prefilter-pvalue 0.05 --dummest-bin bin/dummest
 
-DUMMER prints the active values at startup and includes them in its
+DUMMEST prints the active values at startup and includes them in its
 *E*-value calibration cache hash, so changing them invalidates stale
 cache entries. See
 [`docs/frameshift-rate-approximation.md`](docs/frameshift-rate-approximation.md)
@@ -219,7 +231,7 @@ For nucleotide sequences, `U` (uracil) is converted to `T` (thymine).
 For proteins, `U` (selenocysteine) is treated the same as `C`
 (cysteine), and `O` (pyrrolysine) the same as `K` (lysine).
 
-`dummer` treats other unusual symbols as barriers that break the
+`dummest` treats other unusual symbols as barriers that break the
 sequence into contigs (contiguous sequence).
 
 ## Rarely useful features
@@ -238,7 +250,7 @@ To calculate *E*-values, DUMMEST needs to estimate a *K* parameter for
 each profile.  To do that, it compares the profile to random
 sequences.  To see details of this, give it a profile file only:
 
-    dummer profiles.hmm
+    dummest profiles.hmm
 
 For each profile versus each sequence, it shows the maximum
 end-anchored, start-anchored, and mid-anchored scores.
@@ -294,20 +306,20 @@ These options affect the random sequences:
   *KN* / (2^score)^&lambda;.  That would surely work and give us
   better *E*-values, if only we could determine a good value for &lambda;.
 
-## dummer-build
+## dummest-build
 
 New and experimental.  It makes a profile from an aligned family of
 related sequences (in [Stockholm][] format):
 
-    dummer-build alignments.stk > profiles.hmm
+    dummest-build alignments.stk > profiles.hmm
 
 It may be slow, or fail due to overflow.  This is because of a
 "Baum-Welch" step that refines the profile (which HMMER 3.4 lacks).
 You can omit this step:
 
-    dummer-build --countonly alignments.stk > profiles.hmm
+    dummest-build --countonly alignments.stk > profiles.hmm
 
-* dummer-build down-weights sequences that are similar to each other
+* dummest-build down-weights sequences that are similar to each other
   (e.g. human and chimp versions of a sequence).
 
 * Option `--enone` scales the absolute sequence weights so that the
@@ -335,10 +347,10 @@ You can omit this step:
   integrates evidence from alternative alignment paths.
 
 * Standalone direct DUMMEST invocation is not well tested at present.  For
-  current genomic searches, using `bin/pipeline2.py` is preferred, including
+  current genomic searches, using `bin/pipeline.py` is preferred, including
   when running in `--max` mode.
 
-* For large genomic searches, `bin/pipeline2.py` provides an optional
+* For large genomic searches, `bin/pipeline.py` provides an optional
   filtering pipeline.  It translates nucleotide sequences in all six reading
   frames, uses MMseqs2 to find candidate regions, extracts merged genomic
   windows, and then runs DUMMEST on those windows.

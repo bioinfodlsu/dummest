@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 
-#include "dummer-core.hh"
+#include "dummest-core.hh"
 
 std::istream &readContig(std::istream &in, Sequence &sequence, Contig &contig,
                          std::vector<char> &vec, const char *charToNumber) {

@@ -2,7 +2,7 @@
 //         Patrick Styll   2025
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include "dummer-util.hh"
+#include "dummest-util.hh"
 
 #include "priors/blocks9.hh"
 #include "priors/wheeler4.hh"
@@ -866,7 +866,7 @@ void printProfile(const double *probs, const int *columns,
   int width = alphabetSize + 7;
   const double *bgProbs = probs + profileLength * width + 7;
 
-  std::cout << "HMMER3/f [DUMMER "
+  std::cout << "HMMER3/f [DUMMEST "
 #include "version.hh"
     "]\n";
   std::cout << "NAME  " << ma.name << "\n";
@@ -929,7 +929,7 @@ int main(int argc, char* argv[]) {
   bool pnone = false;
 
   const char help[] = "\
-usage: dummer-build alignments.stk\n\
+usage: dummest-build alignments.stk\n\
 \n\
 Read multiple sequence alignments: write position-specific (-log) probabilities\n\
 of letters, insertions, and deletions.\n\
@@ -996,7 +996,7 @@ Prior probability options:\n\
       std::cout << help;
       return 0;
     case 'V':
-      std::cout << "DUMMER "
+      std::cout << "DUMMEST "
 #include "version.hh"
         "\n";
       return 0;

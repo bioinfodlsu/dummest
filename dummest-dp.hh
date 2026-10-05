@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 
-#include "dummer-core.hh"
-#include "dummer-batch.hh"
+#include "dummest-core.hh"
+#include "dummest-batch.hh"
 
 struct DPScratchCommon {
     // Combined-score matrices in scalar ExpScore (never overflow).

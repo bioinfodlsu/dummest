@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 
-#include "dummer-dp-backward.hh"
-#include "dummer-dp-forward.hh"
-#include "dummer-output.hh"
+#include "dummest-dp-backward.hh"
+#include "dummest-dp-forward.hh"
+#include "dummest-output.hh"
 
 // Combined entry (max mode + calibration): backward half then forward half.
 void findSimilarities(std::array<std::vector<AlignedSimilarity>, simdWidth> &similarities, const Profile &profile,
@@ -83,7 +83,7 @@ void findFinalSimilaritiesBatched(const std::vector<Sequence> &sequences,
 #endif
                                    ) {
     int batchStride = simdWidth;
-    static const char* lanes_env = getenv("DUMMER_MAX_LANES");
+    static const char* lanes_env = getenv("DUMMEST_MAX_LANES");
     if (lanes_env) batchStride = std::clamp(std::atoi(lanes_env), 1, simdWidth);
 
     auto printSims = [&](const std::vector<FinalSimilarity> &jobSimilarities) {

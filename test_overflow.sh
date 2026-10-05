@@ -1,8 +1,8 @@
 #!/bin/bash
-# test_overflow.sh — overflow regression test for dummer's row-rescale
+# test_overflow.sh — overflow regression test for dummest's row-rescale
 # anti-overflow scheme (fast Float path with per-row 2^-64 dynamic
 # rescaling; pair-domain ExpScore selection;
-# implementation: dummer-ovf.hh, dummer-padded.hh).
+# implementation: dummest-ovf.hh, dummest-padded.hh).
 #
 # Cases: herpes (ratio ~e^1507, overflows double) and a 500-codon medium
 # slice (ratio ~e^476, finite in double), each with the double and float
@@ -22,8 +22,8 @@ cd "$(dirname "$0")"
 
 FIXDIR="${TEST_OVERFLOW_TMPDIR:-/tmp/test_overflow}"
 BUILD_DIR="${BUILD_DIR:-cmake-build-release}"
-DUMMER_BIN="${DUMMER_BIN:-$BUILD_DIR/dummer}"
-DUMMERL_BIN="${DUMMERL_BIN:-$BUILD_DIR/dummerl}"
+DUMMER_BIN="${DUMMER_BIN:-$BUILD_DIR/dummest}"
+DUMMERL_BIN="${DUMMERL_BIN:-$BUILD_DIR/dummestl}"
 FP_EVALUE="${FP_EVALUE:-1e-5}"
 NPROC="${NPROC:-$(nproc)}"
 FAIL=0
@@ -60,8 +60,8 @@ for spec in "${CASES[@]}"; do
     IFS='|' read -r name bin cpus fa score tol eregex anchor spans <<<"$spec"
     out="$FIXDIR/$name.out"
     log "run $name"
-    python3 bin/pipeline2.py "$FIXDIR/herpes.hmm" MET.msa "$fa" "$cpus" \
-        --max --dummer-bin "$bin" >"$out" 2>"$out.err"
+    python3 bin/pipeline.py "$FIXDIR/herpes.hmm" MET.msa "$fa" "$cpus" \
+        --max --dummest-bin "$bin" >"$out" 2>"$out.err"
     python3 tools/test_overflow_check.py "$out" "$score" "$tol" "$eregex" "$anchor" "$spans" "$FP_EVALUE" \
         || FAIL=1
 done

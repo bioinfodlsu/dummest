@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 
-#include "dummer-traceback.hh"
-#include "dummer-scalerow.hh"
+#include "dummest-traceback.hh"
+#include "dummest-scalerow.hh"
 
 // Forward half of the unified DP: forward pass over W0 (X fill, wMid gate)
 // + deferred alignment work (fixups, prefixOptimal/suffixOptimal, traceback).

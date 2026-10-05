@@ -30,10 +30,10 @@ typedef SimdFlt SimdFloat;
 using simd_t = Kokkos::Experimental::simd<Float>;
 constexpr auto simdWidth = simd_t::size();
 
-#include "dummer-score.hh"
-#include "dummer-batch.hh"
-#include "dummer-scalerow.hh"
-#include "dummer-padded.hh"
+#include "dummest-score.hh"
+#include "dummest-batch.hh"
+#include "dummest-scalerow.hh"
+#include "dummest-padded.hh"
 
 static int failures = 0;
 #define CHECK(cond, ...) do { \

@@ -13,9 +13,9 @@
 // arise from arithmetic. Under those conditions each kernel is bit-identical
 // to calling the corresponding scalar op lane by lane.
 //
-// Requires ExpScore (dummer-score.hh) and Float/simdWidth.
+// Requires ExpScore (dummest-score.hh) and Float/simdWidth.
 
-#include "dummer-score.hh"
+#include "dummest-score.hh"
 
 #include <bit>
 #include <cmath>

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 
-#include "dummer-search.hh"
-#include "dummer-sequence.hh"
+#include "dummest-search.hh"
+#include "dummest-sequence.hh"
 
 double methodOfMomentsLambda(const double *scores, int n, double meanScore) {
     double pi = 3.1415926535897932;
@@ -200,10 +200,10 @@ public:
 
     std::string computeCacheKey(const Profile &profile, const Float *letterFreqs,
                                     int sequenceLength, int border, int numOfSequences) {
-        // DUMMER_CACHE_IGNORE_BINARY_HASH=1 keeps calibration results valid
+        // DUMMEST_CACHE_IGNORE_BINARY_HASH=1 keeps calibration results valid
         // across rebuilds (at the risk of stale entries if FP behavior changes).
         static const bool ignoreBinaryHash = [] {
-            const char *e = getenv("DUMMER_CACHE_IGNORE_BINARY_HASH");
+            const char *e = getenv("DUMMEST_CACHE_IGNORE_BINARY_HASH");
             return e && *e && strcmp(e, "0") != 0;
         }();
         Hash128 h;
@@ -397,7 +397,7 @@ void estimateK(Profile &profile, const Float *letterFreqs, char *sequence, int s
 #else
         batchStride = simdWidth;
 #endif
-        static const char* lanes_env = getenv("DUMMER_MAX_LANES");
+        static const char* lanes_env = getenv("DUMMEST_MAX_LANES");
         if (lanes_env) batchStride = std::clamp(std::atoi(lanes_env), 1, batchStride);
         int numBatches = (numOfSequences + batchStride - 1) / batchStride;
 

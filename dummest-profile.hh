@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 
-#include "dummer-core.hh"
-#include "dummer-sequence.hh"
+#include "dummest-core.hh"
+#include "dummest-sequence.hh"
 
 int intFromText(const char *text) {
     long x = strtol(text, 0, 0);

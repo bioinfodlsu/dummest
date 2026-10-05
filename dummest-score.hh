@@ -13,7 +13,7 @@
 // crosses RESCALE_THRESH is divided by 2^64 and its cumulative count is
 // incremented; promoteRescaledScore/rowRescaleVector undo that exactly.
 //
-// Requires Float, simd_t, and simdWidth (defined by dummer-core.hh from the
+// Requires Float, simd_t, and simdWidth (defined by dummest-core.hh from the
 // DOUBLE switch and the Kokkos SIMD type).
 #pragma once
 

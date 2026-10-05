@@ -5,16 +5,16 @@
 // sequences with position-varying probabilities of substitutions,
 // insertions, and deletions", MC Frith 2025
 
-#include "dummer-core.hh"
-#include "dummer-sequence.hh"
-#include "dummer-output.hh"
-#include "dummer-dp.hh"
-#include "dummer-traceback.hh"
-#include "dummer-dp-backward.hh"
-#include "dummer-dp-forward.hh"
-#include "dummer-search.hh"
-#include "dummer-calibration.hh"
-#include "dummer-profile.hh"
+#include "dummest-core.hh"
+#include "dummest-sequence.hh"
+#include "dummest-output.hh"
+#include "dummest-dp.hh"
+#include "dummest-traceback.hh"
+#include "dummest-dp-backward.hh"
+#include "dummest-dp-forward.hh"
+#include "dummest-search.hh"
+#include "dummest-calibration.hh"
+#include "dummest-profile.hh"
 
 int main(int argc, char *argv[]) {
 #if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
@@ -47,7 +47,7 @@ int main(int argc, char *argv[]) {
     }
 
     const char help[] = "\
-usage: dummer profiles.hmm [sequences.fa]\n\
+usage: dummest profiles.hmm [sequences.fa]\n\
 \n\
 Find similarities between sequences and profiles.   A profile is a set of\n\
 position-specific letter, deletion, and insertion probabilities.\n\
@@ -151,7 +151,7 @@ Filter pass options:\n\
             std::cout << help;
             return 0;
         case 'V':
-            std::cout << "DUMMER "
+            std::cout << "DUMMEST "
 #include "version.hh"
                          "\n";
             return 0;
@@ -333,7 +333,7 @@ Filter pass options:\n\
     size_t seqIdx = charVec.size();
     charVec.resize(seqIdx + simdRoundUp(randomSeqLen + border + 1));
 
-    std::cout << "# DUMMER "
+    std::cout << "# DUMMEST "
 #include "version.hh"
                  "\n";
     std::cout << "# Bytes per floating-point number: " << sizeof(Float) << "\n";
@@ -480,7 +480,7 @@ Filter pass options:\n\
         // re-read it before streaming.
         std::error_code ec;
         spoolPath = std::filesystem::temp_directory_path(ec) /
-                    ("dummer-stdin-" + std::to_string(std::random_device{}()) + ".fa");
+                    ("dummest-stdin-" + std::to_string(std::random_device{}()) + ".fa");
         {
             std::ofstream out(spoolPath, std::ios::binary);
             out << std::cin.rdbuf();

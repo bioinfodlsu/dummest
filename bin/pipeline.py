@@ -20,11 +20,11 @@ def _tmp_base_dir(fa_file):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Pipeline2: HMM-guided genomic search via MMseqs2 + dummer",
+        description="Pipeline: HMM-guided genomic search via MMseqs2 + dummest",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Examples:\n"
-               "  python3 pipeline2.py profile.hmm msa.msa genome.fa 8\n"
-               "  python3 pipeline2.py profile.hmm msa.msa genome.fa 8 --target-db-pad /path/to/targetDB_pad --query-db /path/to/queryDB\n"
+               "  python3 pipeline.py profile.hmm msa.msa genome.fa 8\n"
+               "  python3 pipeline.py profile.hmm msa.msa genome.fa 8 --target-db-pad /path/to/targetDB_pad --query-db /path/to/queryDB\n"
     )
     parser.add_argument("hmm_file", help="HMM profile file")
     parser.add_argument("msa_file", help="MSA file (.msa for Stockholm, otherwise used as-is for query DB). Ignored when --query-db is provided.")
@@ -34,14 +34,14 @@ def main():
                         help="Path to an existing padded target DB (skips createdb + makepaddedseqdb)")
     parser.add_argument("--query-db", dest="query_db", default=None,
                         help="Path to an existing query profile DB (skips convertmsa + msa2profile)")
-    parser.add_argument("--skip-dummer", action="store_true",
-                        help="Skip running dummer (only generate debug.fa)")
+    parser.add_argument("--skip-dummest", dest="skip_dummer", action="store_true",
+                        help="Skip running dummest (only generate debug.fa)")
     parser.add_argument("--output-fa", dest="output_fa", default=None,
                         help="Save debug FASTA to this path (persistent copy)")
     parser.add_argument("--max", action="store_true",
                         help="Max sensitivity: disable heuristic windowing (pad=full contig)")
-    parser.add_argument("--dummer-bin", dest="dummer_bin", default=None,
-                        help="Path to dummer binary (overrides default dummer)")
+    parser.add_argument("--dummest-bin", dest="dummer_bin", metavar="DUMMEST_BIN", default=None,
+                        help="Path to dummest binary (overrides default dummest)")
     parser.add_argument("--prefilter-mode", type=int, default=1, choices=[1],
                         help="MMseqs2 prefilter mode (currently only 1 = ungapped "
                              "prefilter, applies --ungapped-pvalue).")
@@ -62,7 +62,7 @@ def main():
                               "Ignored in --max mode, which skips MMseqs2.")
     parser.add_argument("--ungapped-calib", dest="ungapped_calib", default=None,
                          help="Path to sidecar cache for per-profile ungapped calibration "
-                              "(default: ~/.cache/dummer/ungappedcalib.tsv, shared across runs: "
+                              "(default: ~/.cache/dummest/ungappedcalib.tsv, shared across runs: "
                               "rows are keyed by profile-content hash, so sharing is safe). "
                               "Passed as --ungapped-calib to 'mmseqs search'. "
                               "Ignored in --max mode, which skips MMseqs2.")
@@ -73,27 +73,27 @@ def main():
     parser.add_argument("--mmseqs-bin", dest="mmseqs_bin", default=None,
                          help="Path to mmseqs binary (overrides default mmseqs from PATH)")
     parser.add_argument("--insert1", type=float, default=None,
-                        help="DUMMER 1-base insertion rate per base (default: dummer default 0.0171)")
+                        help="DUMMEST 1-base insertion rate per base (default: dummest default 0.0171)")
     parser.add_argument("--insert2", type=float, default=None,
-                        help="DUMMER 2-base insertion rate per base (default: dummer default 0.0018)")
+                        help="DUMMEST 2-base insertion rate per base (default: dummest default 0.0018)")
     parser.add_argument("--delete1", type=float, default=None,
-                        help="DUMMER 1-base deletion rate per base (default: dummer default 0.0328)")
+                        help="DUMMEST 1-base deletion rate per base (default: dummest default 0.0328)")
     parser.add_argument("--delete2", type=float, default=None,
-                        help="DUMMER 2-base deletion rate per base (default: dummer default 0.0083)")
+                        help="DUMMEST 2-base deletion rate per base (default: dummest default 0.0083)")
     parser.add_argument("--stop-codon-prob", dest="stop_codon_prob", type=float, default=None,
-                        help="DUMMER stop codon probability (default: dummer default 0.0005)")
+                        help="DUMMEST stop codon probability (default: dummest default 0.0005)")
     parser.add_argument("--bg-stop-codon-prob", dest="bg_stop_codon_prob", type=float, default=None,
-                        help="DUMMER background stop codon probability (default: dummer default 0.046875)")
+                        help="DUMMEST background stop codon probability (default: dummest default 0.046875)")
     parser.add_argument("--tantan-threshold", dest="tantan_threshold", type=float, default=None,
-                        help="DUMMER tantan masking threshold (default: dummer default 0.5)")
+                        help="DUMMEST tantan masking threshold (default: dummest default 0.5)")
     parser.add_argument("--evalue", "-e", dest="evalue", type=float, default=10,
-                        help="DUMMER E-value threshold (default: 10). Forwarded as both -e and -W to dummer.")
+                        help="DUMMEST E-value threshold (default: 10). Forwarded as both -e and -W to dummest.")
     parser.add_argument("--batch", dest="batch", type=int, default=800000,
-                        help="DUMMER stream chunk size in sequences (default: threads * 10000). "
+                        help="DUMMEST stream chunk size in sequences (default: threads * 10000). "
                              "Small values force multi-chunk streaming.")
     parser.add_argument("--trials", dest="trials", type=int, default=None,
-                        help="DUMMER calibration random sequences (-t). "
-                             "Default: dummer default (1000).")
+                        help="DUMMEST calibration random sequences (-t). "
+                             "Default: dummest default (1000).")
 
     args = parser.parse_args()
 
@@ -151,7 +151,7 @@ def main():
         print("# Genome >2GB, using CWD for temp instead of /tmp")
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    dummer_exec = args.dummer_bin or os.path.join(script_dir, "../bin/dummerl")
+    dummer_exec = args.dummer_bin or os.path.join(script_dir, "../bin/dummestl")
     mmseqs_exec = args.mmseqs_bin or "mmseqs"
 
     # ---------------------------------------------------------
@@ -198,7 +198,7 @@ def main():
     # ---------------------------------------------------------
     if args.max:
         _base = tmp_parent or tempfile.gettempdir()
-        merged_fa_path = os.path.join(_base, f"dummer_max.{os.getpid()}.fa")
+        merged_fa_path = os.path.join(_base, f"dummest_max.{os.getpid()}.fa")
         trans = str.maketrans("ACGTacgt", "TGCAtgca")
 
         with open(merged_fa_path, "w") as fout:
@@ -221,7 +221,7 @@ def main():
                     env=os.environ.copy(), check=True,
                 )
             except subprocess.CalledProcessError as e:
-                print(f"Error: dummer encountered an issue (Exit status: {e.returncode})")
+                print(f"Error: dummest encountered an issue (Exit status: {e.returncode})")
                 sys.exit(1)
 
         if args.output_fa:
@@ -463,7 +463,7 @@ def main():
             try:
                 subprocess.run([dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-e', str(args.evalue), '-W', str(args.evalue), '-N', str(tot_seq_len)] + dummer_extra_args, env=custom_env, check=True)
             except subprocess.CalledProcessError as e:
-                print(f"Error: dummer encountered an issue (Exit status: {e.returncode})")
+                print(f"Error: dummest encountered an issue (Exit status: {e.returncode})")
                 sys.exit(1)
 
 if __name__ == "__main__":

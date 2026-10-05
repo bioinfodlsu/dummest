@@ -5,7 +5,7 @@
 // so DP code can stay free of SIMD intrinsics. Only the simd_t (Float lane)
 // specialization is instantiated.
 
-#include "dummer-score.hh"
+#include "dummest-score.hh"
 #include "can_i_haz_simd.hh" // simdLookup
 
 template <typename Vec> struct VecTraits;

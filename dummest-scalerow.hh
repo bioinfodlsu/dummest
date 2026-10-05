@@ -13,7 +13,7 @@
 // below the row maximum flush to zero; this is the accepted fast-compute
 // contract -- the maximum itself is exact, and stored values stay ExpScore.
 
-#include "dummer-score.hh"
+#include "dummest-score.hh"
 
 #include <cstdint>
 #include <cstring>

@@ -1,5 +1,7 @@
 version.hh
 bin/dummer*
+bin/dummest*
+*.sif
 build
 
 # test_scores.sh outputs
@@ -98,6 +100,8 @@ http-client.private.env.json
 .idea/**/copilot.data.migration.*.xml
 # Local (non-canonical) build trees
 build*/
+# Staged Apptainer artifacts (transient, created by build_apptainer.sh)
+.apptainer-stage/
 # Python bytecode from pipeline runs
 __pycache__/
 *.pyc
@@ -105,3 +109,5 @@ __pycache__/
 *.fai
 # Local profiler outputs
 perf.data*
+# Local one-off rerun script (hardcoded paths)
+rerun_affected.sh

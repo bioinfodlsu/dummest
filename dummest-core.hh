@@ -7,7 +7,7 @@
 // sequences with position-varying probabilities of substitutions,
 // insertions, and deletions", MC Frith 2025
 
-#include "dummer-util.hh"
+#include "dummest-util.hh"
 #include "tantan-wrapper.hh"
 // clang-format off
 #include "can_i_haz_simd.hh"
@@ -109,7 +109,7 @@ constexpr auto simdWidth = simd_t::size();
 
 // Padded DP containers + overflow-proof score arithmetic. Included here
 // because both are typed on Float/simd_t/simdWidth above.
-#include "dummer-padded.hh"
+#include "dummest-padded.hh"
 
 Float STOP_CODON_PROB = OPT_stop;
 Float BG_STOP_CODON_PROB = OPT_bg_stop; // 3/64

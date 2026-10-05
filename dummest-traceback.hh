@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 
-#include "dummer-dp.hh"
+#include "dummest-dp.hh"
 
 void addForwardMatch(std::vector<SegmentPair> &alignment, int pos1, int pos2) {
     if (!alignment.empty()) {

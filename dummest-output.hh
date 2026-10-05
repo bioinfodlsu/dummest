@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 
-#include "dummer-core.hh"
+#include "dummest-core.hh"
 
 char profileLetter(const char *alphabet, char letterCode) {
     return alphabet[letterCode & 31] + (letterCode & 32); // upper/lowercase

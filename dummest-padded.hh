@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Padded DP containers for dummer.cc: PaddedVec, Matrix, and the
+// Padded DP containers for dummest.cc: PaddedVec, Matrix, and the
 // ExpScore-backed vectors/matrices/side accumulators.
 //
 // Include AFTER Float, simd_t, and simdWidth are defined. Pulls in
-// dummer-ovf.hh for ExpScore and the score helpers.
+// dummest-ovf.hh for ExpScore and the score helpers.
 #pragma once
 
-#include "dummer-score.hh"
-#include "dummer-vectraits.hh"
+#include "dummest-score.hh"
+#include "dummest-vectraits.hh"
 
 #include <algorithm>
 #include <array>
