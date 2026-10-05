@@ -240,7 +240,8 @@ private:
     static std::filesystem::path getCacheFilePath() {
         // Shared with bin/pipeline.py: $DUMMEST_CACHE_DIR, then
         // $XDG_CACHE_HOME/.dummest-cache, $HOME/.dummest-cache,
-        // ./.dummest-cache, /tmp/.dummest-cache, then the current directory.
+        // ./.dummest-cache, $TMPDIR/.dummest-cache, /tmp/.dummest-cache, then
+        // the current directory.
         std::vector<std::filesystem::path> candidates;
         if (const char* dir = std::getenv("DUMMEST_CACHE_DIR"); dir && *dir) {
             candidates.emplace_back(dir);

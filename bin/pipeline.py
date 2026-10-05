@@ -24,7 +24,7 @@ def _tmp_base_dir(fa_file):
 def _cache_dir():
     # Shared with dummest: $DUMMEST_CACHE_DIR, then
     # $XDG_CACHE_HOME/.dummest-cache, $HOME/.dummest-cache, ./.dummest-cache,
-    # /tmp/.dummest-cache, then the current directory.
+    # $TMPDIR/.dummest-cache, /tmp/.dummest-cache, then the current directory.
     candidates = []
     override = os.environ.get("DUMMEST_CACHE_DIR")
     if override:
@@ -87,7 +87,7 @@ def main():
     parser.add_argument("fa_file", help="Genome FASTA file")
     parser.add_argument("cpus", help="Number of CPUs")
     parser.add_argument("--target-db-pad", dest="target_db_pad", default=None,
-                        help="Path to an existing padded target DB (skips createdb + makepaddedseqdb)")
+                        help="Path to an existing padded target DB (skips createdb)")
     parser.add_argument("--query-db", dest="query_db", default=None,
                         help="Path to an existing query profile DB (skips convertmsa + msa2profile)")
     parser.add_argument("--skip-dummest", dest="skip_dummer", action="store_true",
