@@ -109,5 +109,3 @@ __pycache__/
 *.fai
 # Local profiler outputs
 perf.data*
-# Local one-off rerun script (hardcoded paths)
-rerun_affected.sh
