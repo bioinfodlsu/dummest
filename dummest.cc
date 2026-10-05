@@ -95,7 +95,9 @@ Options for frameshifts, stop codons, and masking:\n\
                     1-bp frameshift branch = insert1 + delete2; 2-bp branch = insert2 + delete1\n\
 \n\
 Environment:\n\
-  DUMMER_CACHE_IGNORE_BINARY_HASH=1  reuse the E-value calibration cache across rebuilds\n\
+  DUMMEST_CACHE_DIR=DIR               cache directory (default: $XDG_CACHE_HOME\n\
+                                     or $HOME/.dummest-cache)\n\
+  DUMMEST_CACHE_IGNORE_BINARY_HASH=1  reuse the E-value calibration cache across rebuilds\n\
 \n\
 Max sensitivity:\n\
   --max             skip/bypass filter pass (overrides -W/--filter-evalue)\n"

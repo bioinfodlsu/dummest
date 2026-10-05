@@ -129,7 +129,7 @@ Other supported pipeline options include:
 * `--no-gpu`: run MMseqs2 on CPU only (passes `--gpu 0` to `createdb` and `search`).
 * `--ungapped-pvalue F` (default: `0.02`): keep prefilter pairs whose per-profile
   ungapped p-value is `<= F` (`1.0` disables the gate). Passed to `mmseqs search`.
-* `--ungapped-calib PATH` (default: `~/.cache/dummest/ungappedcalib.tsv`):
+* `--ungapped-calib PATH` (default: `.dummest-cache/ungappedcalib.tsv`):
   sidecar cache for the per-profile `(lambda, K)` calibration.
 * `--ungapped-recalibrate`: ignore cache entries and recalibrate every profile.
 * `--prefilter-pvalue F` (default: `0.005`): MMseqs2 prefilter p-value.
@@ -200,6 +200,17 @@ means find them in profiles only, `-m2` means sequences only, and
 
 These DUMMEST options override the compiled-in defaults (current
 defaults in parentheses). They are also accepted by
+### Cache location
+
+`dummest` and `pipeline.py` share a `.dummest-cache` directory holding the
+E-value calibration (`cache.bin`) and the MMseqs2 ungapped calibration
+(`ungappedcalib.tsv`).  It is resolved from `$DUMMEST_CACHE_DIR`, then
+`$XDG_CACHE_HOME/.dummest-cache`, then `$HOME/.dummest-cache`, then
+`./.dummest-cache`, then `/tmp/.dummest-cache`, and finally the current
+directory.  On shared filesystems (e.g. an HPC home directory) concurrent runs
+can overwrite each other's entries, so point `DUMMEST_CACHE_DIR` at node-local
+scratch for parallel jobs.
+
 `bin/pipeline.py`, which forwards them to its DUMMEST invocation:
 
 * `--insert1 F` (default: `0.0171`): 1-base insertion rate per base.

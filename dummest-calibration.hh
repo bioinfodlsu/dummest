@@ -238,27 +238,35 @@ private:
     bool loaded = false;
 
     static std::filesystem::path getCacheFilePath() {
-        std::filesystem::path cacheDir;
-
-        if (const char* xdgCache = std::getenv("XDG_CACHE_HOME"); xdgCache && *xdgCache) {
-            cacheDir = std::filesystem::path(xdgCache);
-        } else if (const char* home = std::getenv("HOME")) {
-            cacheDir = std::filesystem::path(home) / ".cache";
-        } else {
-            cacheDir = std::filesystem::current_path();
+        // Shared with bin/pipeline.py: $DUMMEST_CACHE_DIR, then
+        // $XDG_CACHE_HOME/.dummest-cache, $HOME/.dummest-cache,
+        // ./.dummest-cache, /tmp/.dummest-cache, then the current directory.
+        std::vector<std::filesystem::path> candidates;
+        if (const char* dir = std::getenv("DUMMEST_CACHE_DIR"); dir && *dir) {
+            candidates.emplace_back(dir);
         }
+        if (const char* xdgCache = std::getenv("XDG_CACHE_HOME"); xdgCache && *xdgCache) {
+            candidates.emplace_back(std::filesystem::path(xdgCache) / ".dummest-cache");
+        }
+        if (const char* home = std::getenv("HOME"); home && *home) {
+            candidates.emplace_back(std::filesystem::path(home) / ".dummest-cache");
+        }
+        candidates.emplace_back(std::filesystem::current_path() / ".dummest-cache");
+        if (const char* tmp = std::getenv("TMPDIR"); tmp && *tmp) {
+            candidates.emplace_back(std::filesystem::path(tmp) / ".dummest-cache");
+        }
+        candidates.emplace_back("/tmp/.dummest-cache");
 
-        std::filesystem::path appCacheDir = cacheDir / "dummer";
-        if (!std::filesystem::exists(appCacheDir)) {
+        for (const auto &dir : candidates) {
             std::error_code ec;
-            std::filesystem::create_directories(appCacheDir, ec);
-            if (ec) {
-                std::cerr << "# Warning: Could not create cache directory: " << ec.message() << "\n";
-                appCacheDir = std::filesystem::current_path();
+            std::filesystem::create_directories(dir, ec);
+            if (!ec && std::filesystem::is_directory(dir, ec)) {
+                return dir / "cache.bin";
             }
         }
 
-        return appCacheDir / "cache.bin";
+        std::cerr << "# Warning: Could not create cache directory; using current directory\n";
+        return std::filesystem::current_path() / "cache.bin";
     }
 
     void load() {

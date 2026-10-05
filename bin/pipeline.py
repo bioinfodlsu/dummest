@@ -10,13 +10,45 @@ _DISK_TMP_THRESHOLD = 2 * 1024**3  # 2 GiB
 
 
 def _tmp_base_dir(fa_file):
-    """Return None (= system /tmp) or '.' (CWD disk) based on fa size."""
+    if os.environ.get("DUMMEST_TMP_BYPASS", "1") in ("0", "false", "False", "no"):
+        return None
     try:
         if os.path.getsize(fa_file) > _DISK_TMP_THRESHOLD:
             return "."
     except OSError:
         pass
     return None
+
+
+def _cache_dir():
+    # Shared with dummest: $DUMMEST_CACHE_DIR, then
+    # $XDG_CACHE_HOME/.dummest-cache, $HOME/.dummest-cache, ./.dummest-cache,
+    # /tmp/.dummest-cache, then the current directory.
+    candidates = []
+    override = os.environ.get("DUMMEST_CACHE_DIR")
+    if override:
+        candidates.append(override)
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    if xdg:
+        candidates.append(os.path.join(xdg, ".dummest-cache"))
+    home = os.environ.get("HOME")
+    if home:
+        candidates.append(os.path.join(home, ".dummest-cache"))
+    candidates.append(os.path.join(os.getcwd(), ".dummest-cache"))
+    tmp = os.environ.get("TMPDIR") or tempfile.gettempdir()
+    if tmp:
+        candidates.append(os.path.join(tmp, ".dummest-cache"))
+    candidates.append("/tmp/.dummest-cache")
+
+    for d in candidates:
+        try:
+            os.makedirs(d, exist_ok=True)
+            if os.access(d, os.W_OK):
+                return d
+        except OSError:
+            continue
+    return os.getcwd()
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -62,7 +94,7 @@ def main():
                               "Ignored in --max mode, which skips MMseqs2.")
     parser.add_argument("--ungapped-calib", dest="ungapped_calib", default=None,
                          help="Path to sidecar cache for per-profile ungapped calibration "
-                              "(default: ~/.cache/dummest/ungappedcalib.tsv, shared across runs: "
+                              "(default: .dummest-cache/ungappedcalib.tsv, shared across runs: "
                               "rows are keyed by profile-content hash, so sharing is safe). "
                               "Passed as --ungapped-calib to 'mmseqs search'. "
                               "Ignored in --max mode, which skips MMseqs2.")
@@ -142,8 +174,7 @@ def main():
     fa_file = args.fa_file
     cpus = args.cpus
     if args.ungapped_calib is None:
-        calib_dir = os.path.join(os.path.expanduser("~"), ".cache", "dummer")
-        os.makedirs(calib_dir, exist_ok=True)
+        calib_dir = _cache_dir()
         args.ungapped_calib = os.path.join(calib_dir, "ungappedcalib.tsv")
 
     tmp_parent = _tmp_base_dir(fa_file)
