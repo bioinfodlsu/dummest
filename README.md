@@ -1,6 +1,6 @@
 # DUMMEST
 
-DUMMEST (DUMMER without Explicit Sequence Translation) it finds similar regions between DNA sequences and profile HMMs allowing for frameshifts.
+DUMMEST (DUMMER without Explicit Sequence Translation) finds similar regions between DNA sequences and profile HMMs allowing for frameshifts.
 
 ## Running DUMMEST
 
