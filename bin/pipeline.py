@@ -63,11 +63,15 @@ def _resolve_gpu(mode):
         return True
     if mode == "off":
         return False
-    if _gpu_available():
-        print("# GPU detected (nvidia-smi); using GPU MMseqs2 prefilter")
-        return True
-    print("# No NVIDIA GPU detected; using CPU-only MMseqs2 prefilter")
-    return False
+    return _gpu_available()
+
+
+def _run_dummer(cmd):
+    try:
+        subprocess.run(cmd, env=os.environ.copy(), check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error: dummest encountered an issue (Exit status: {e.returncode})")
+        sys.exit(1)
 
 
 def main():
@@ -179,34 +183,28 @@ def main():
         parser.error("--length must be >= 1")
 
     dummer_extra_args = []
-    if args.batch is not None:
-        dummer_extra_args += ["--batch", str(args.batch)]
-    if args.trials is not None:
-        dummer_extra_args += ["-t", str(args.trials)]
-    if args.length is not None:
-        dummer_extra_args += ["-l", str(args.length)]
-    if args.insert1 is not None:
-        dummer_extra_args += ["--insert1", str(args.insert1)]
-    if args.insert2 is not None:
-        dummer_extra_args += ["--insert2", str(args.insert2)]
-    if args.delete1 is not None:
-        dummer_extra_args += ["--delete1", str(args.delete1)]
-    if args.delete2 is not None:
-        dummer_extra_args += ["--delete2", str(args.delete2)]
-    if args.stop_codon_prob is not None:
-        dummer_extra_args += ["--stop-codon-prob", str(args.stop_codon_prob)]
-    if args.bg_stop_codon_prob is not None:
-        dummer_extra_args += ["--bg-stop-codon-prob", str(args.bg_stop_codon_prob)]
-    if args.tantan_threshold is not None:
-        dummer_extra_args += ["--tantan-threshold", str(args.tantan_threshold)]
+    for _dest, _flag in [
+        ("batch", "--batch"),
+        ("trials", "-t"),
+        ("length", "-l"),
+        ("insert1", "--insert1"),
+        ("insert2", "--insert2"),
+        ("delete1", "--delete1"),
+        ("delete2", "--delete2"),
+        ("stop_codon_prob", "--stop-codon-prob"),
+        ("bg_stop_codon_prob", "--bg-stop-codon-prob"),
+        ("tantan_threshold", "--tantan-threshold"),
+    ]:
+        _v = getattr(args, _dest)
+        if _v is not None:
+            dummer_extra_args += [_flag, str(_v)]
 
     hmm_file = args.hmm_file
     msa_file = args.msa_file
     fa_file = args.fa_file
     cpus = args.cpus
     if args.ungapped_calib is None:
-        calib_dir = _cache_dir()
-        args.ungapped_calib = os.path.join(calib_dir, "ungappedcalib.tsv")
+        args.ungapped_calib = os.path.join(_cache_dir(), "ungappedcalib.tsv")
 
     tmp_parent = _tmp_dir()
     print(f"# Temporary directory base: {tmp_parent}")
@@ -258,15 +256,14 @@ def main():
     # --max mode: skip mmseqs2, run dummer directly on all profiles x contigs
     # ---------------------------------------------------------
     if args.max:
-        _base = tmp_parent
-        merged_fa_path = os.path.join(_base, f"dummest_max.{os.getpid()}.fa")
+        merged_fa_path = os.path.join(tmp_parent, f"dummest_max.{os.getpid()}.fa")
         trans = str.maketrans("ACGTacgt", "TGCAtgca")
 
         with open(merged_fa_path, "w") as fout:
             for chrom, seq in dna_seqs.items():
                 L = len(seq)
                 rc_seq = seq.translate(trans)[::-1]
-                for prof in sorted(hmm_lens.keys()):
+                for prof in sorted(hmm_lens):
                     fout.write(f">{chrom}/1-{L} length={L} profile={prof} plus_strand\n")
                     fout.write(f"{seq}\n")
                     fout.write(f">{chrom}/1-{L} length={L} profile={prof} minus_strand_revcomp\n")
@@ -275,18 +272,12 @@ def main():
         print(f"# Max-mode FASTA written to: {merged_fa_path}")
 
         if not args.skip_dummer:
-            try:
-                subprocess.run(
-                    [dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '--max', '-e', str(args.evalue), '-N', str(tot_seq_len)]
-                    + dummer_extra_args,
-                    env=os.environ.copy(), check=True,
-                )
-            except subprocess.CalledProcessError as e:
-                print(f"Error: dummest encountered an issue (Exit status: {e.returncode})")
-                sys.exit(1)
+            _run_dummer(
+                [dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '--max', '-e', str(args.evalue), '-N', str(tot_seq_len)]
+                + dummer_extra_args
+            )
 
         if args.output_fa:
-            import shutil
             shutil.copy2(merged_fa_path, args.output_fa)
             print(f"# Debug FASTA saved to: {args.output_fa}")
         else:
@@ -307,8 +298,8 @@ def main():
         gpu_flag = "1" if use_gpu else "0"
         print(f"# MMseqs2 prefilter: {'GPU' if use_gpu else 'CPU-only'} (--gpu {gpu_flag})")
 
-        ali_file = os.path.join(db_dir, f"result.ali")
-        tmp_file = os.path.join(db_dir, f"tmp")
+        ali_file = os.path.join(db_dir, "result.ali")
+        tmp_file = os.path.join(db_dir, "tmp")
 
         if args.target_db_pad:
             target_db_pad = args.target_db_pad
@@ -362,8 +353,7 @@ def main():
             "--alignment-mode", "2",
         ]
         if not use_gpu:
-            mmseqs_cmd.extend(["--spaced-kmer-mode", "0"])
-            mmseqs_cmd.extend(["-s", "7.5"])
+            mmseqs_cmd.extend(["--spaced-kmer-mode", "0", "-s", "7.5"])
         if args.ungapped_recalibrate:
             mmseqs_cmd.extend(["--ungapped-recalibrate", "1"])
         print(f"# Ungapped calibration cache: {args.ungapped_calib}"
@@ -416,7 +406,6 @@ def main():
                               file=sys.stderr)
                     continue
                 p_pos = max(1, (t_start + t_end) // 2)
-                e_value = fields[10]
                 bitscore = fields[11]
 
                 *target_parts, frame_str = target_full.rsplit('_', 1)
@@ -470,7 +459,6 @@ def main():
         except Exception:
             # Preserve the offender for Run-A forensics: tmpdir is deleted
             # on exit, so copy the convertalis output to CWD before re-raise.
-            import shutil
             rescue = os.path.join(os.getcwd(),
                                   f"convertalis.{os.path.basename(fa_file)}.tmp.failed")
             try:
@@ -489,7 +477,7 @@ def main():
         merged_bed.saveas(merged_bed_path)
         
         raw_fa_path = os.path.join(tmpdir, "raw_ext.fa")
-        merged_fa_path = os.path.join(tmpdir, f"debug.fa")
+        merged_fa_path = os.path.join(tmpdir, "debug.fa")
 
         # bedtools writes <fi>.fai next to the input FASTA; if fa_file lives on
         # a read-only mount (e.g. the Apptainer image), that fails. Symlink it
@@ -519,7 +507,6 @@ def main():
                     fout.write(line)
 
         if args.output_fa:
-            import shutil
             shutil.copy2(merged_fa_path, args.output_fa)
             print(f"# Debug FASTA saved to: {args.output_fa}")
 
@@ -527,14 +514,10 @@ def main():
         # 6. Run Dummer
         # ---------------------------------------------------------
         if not args.skip_dummer:
-            custom_env = os.environ.copy()
-            #custom_env["ASAN_OPTIONS"] = "detect_container_overflow=1:strict_memcmp=1"
-            
-            try:
-                subprocess.run([dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-e', str(args.evalue), '-W', str(args.evalue), '-N', str(tot_seq_len)] + dummer_extra_args, env=custom_env, check=True)
-            except subprocess.CalledProcessError as e:
-                print(f"Error: dummest encountered an issue (Exit status: {e.returncode})")
-                sys.exit(1)
+            _run_dummer(
+                [dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-e', str(args.evalue), '-W', str(args.evalue), '-N', str(tot_seq_len)]
+                + dummer_extra_args
+            )
 
 if __name__ == "__main__":
     main()
