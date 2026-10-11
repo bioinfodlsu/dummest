@@ -66,7 +66,15 @@ add_subdirectory(kokkos-5.1.1)
 # -DDUMMEST_SKIP_BIN_COPY=ON so building never touches bin/.
 option(DUMMEST_SKIP_BIN_COPY "Skip copying built binaries to bin/" OFF)
 
-add_executable(dummest dummest.cc dummest-util.hh dummest-score.hh dummest-batch.hh dummest-scalerow.hh dummest-vectraits.hh dummest-padded.hh dummest-core.hh dummest-sequence.hh dummest-output.hh dummest-dp.hh dummest-traceback.hh dummest-dp-backward.hh dummest-dp-forward.hh dummest-search.hh dummest-calibration.hh dummest-profile.hh tantan-wrapper.hh version.hh can_i_haz_simd.hh)
+# Debug "poison" mode: fill uninitialized DP scratch with NaN sentinels so
+# stale/previous-batch/OOB reads abort via assert (see dummest-poison.hh).
+# Debug-only: never shipped. A poison build that finishes with output
+# identical to a normal build proves every scratch read was preceded by a write.
+# Poison binaries must use a scratch DUMMEST_CACHE_DIR (calibration results
+# from poison runs are still valid scores, but keep caches separate anyway).
+option(DUMMEST_POISON "Fill uninitialized DP scratch with NaN poison (debug only)" OFF)
+
+add_executable(dummest dummest.cc dummest-util.hh dummest-score.hh dummest-poison.hh dummest-batch.hh dummest-scalerow.hh dummest-vectraits.hh dummest-padded.hh dummest-core.hh dummest-sequence.hh dummest-output.hh dummest-dp.hh dummest-traceback.hh dummest-dp-backward.hh dummest-dp-forward.hh dummest-search.hh dummest-calibration.hh dummest-profile.hh tantan-wrapper.hh version.hh can_i_haz_simd.hh)
 target_compile_definitions(dummest PRIVATE DOUBLE FILTER_PASS)
 target_include_directories(dummest PRIVATE "${CMAKE_SOURCE_DIR}/include")
 target_link_libraries(dummest Kokkos::kokkos)
@@ -76,10 +84,14 @@ add_custom_command(TARGET dummest POST_BUILD
         $<TARGET_FILE:dummest> "${CMAKE_SOURCE_DIR}/bin/dummest")
 endif()
 
-add_executable(dummestl dummest.cc dummest-util.hh dummest-score.hh dummest-batch.hh dummest-scalerow.hh dummest-vectraits.hh dummest-padded.hh dummest-core.hh dummest-sequence.hh dummest-output.hh dummest-dp.hh dummest-traceback.hh dummest-dp-backward.hh dummest-dp-forward.hh dummest-search.hh dummest-calibration.hh dummest-profile.hh tantan-wrapper.hh version.hh can_i_haz_simd.hh)
+add_executable(dummestl dummest.cc dummest-util.hh dummest-score.hh dummest-poison.hh dummest-batch.hh dummest-scalerow.hh dummest-vectraits.hh dummest-padded.hh dummest-core.hh dummest-sequence.hh dummest-output.hh dummest-dp.hh dummest-traceback.hh dummest-dp-backward.hh dummest-dp-forward.hh dummest-search.hh dummest-calibration.hh dummest-profile.hh tantan-wrapper.hh version.hh can_i_haz_simd.hh)
 target_compile_definitions(dummestl PRIVATE FILTER_PASS)
 target_include_directories(dummestl PRIVATE "${CMAKE_SOURCE_DIR}/include")
 target_link_libraries(dummestl Kokkos::kokkos)
+if(DUMMEST_POISON)
+    target_compile_definitions(dummest PRIVATE DUMMEST_POISON)
+    target_compile_definitions(dummestl PRIVATE DUMMEST_POISON)
+endif()
 if(NOT DUMMEST_SKIP_BIN_COPY)
 add_custom_command(TARGET dummestl POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

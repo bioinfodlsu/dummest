@@ -40,6 +40,9 @@
 // with x == (double)m * 2^eAdd, replicating frexp-then-narrow-to-float.
 // Input 0 maps to (0,0) and subnormal input flushes to (0,0).
 inline void splitNormalizedDouble(double x, float &mOut, int &eAdd) {
+    // NaN never arises legitimately (factors are checked finite upstream);
+    // under poison a NaN here means a poisoned mantissa leaked into a double.
+    DUMMEST_POISON_ASSERT(!std::isnan(x));
     if (x == 0.0) { mOut = 0.0f; eAdd = 0; return; }
     uint64_t u = std::bit_cast<uint64_t>(x);
     int ef = (int)((u >> 52) & 0x7FFULL);
@@ -53,6 +56,9 @@ inline void splitNormalizedDouble(double x, float &mOut, int &eAdd) {
 // STATIC_SHIFT = the combined-score formation). Zero inputs yield zero.
 // Equal to mulScores on every lane.
 inline void batchMulScores(const ExpScore *A, const ExpScore *B, ExpScore *out, int n, int eFold) {
+#ifdef DUMMEST_POISON
+    for (int k = 0; k < n; ++k) { DUMMEST_POISON_ASSERT(!isPoisonScore(A[k]) && !isPoisonScore(B[k])); }
+#endif
 #pragma GCC ivdep
     for (int k = 0; k < n; ++k) {
         const bool nz = (A[k].m != 0.0f) & (B[k].m != 0.0f);
@@ -70,6 +76,9 @@ inline void batchMulScores(const ExpScore *A, const ExpScore *B, ExpScore *out, 
 // the exponent gap, since the dropped part is below double rounding). Equal
 // to addScores on every lane.
 inline void batchAddScores(const ExpScore *A, const ExpScore *B, ExpScore *out, int n) {
+#ifdef DUMMEST_POISON
+    for (int k = 0; k < n; ++k) { DUMMEST_POISON_ASSERT(!isPoisonScore(A[k]) && !isPoisonScore(B[k])); }
+#endif
 #pragma GCC ivdep
     for (int k = 0; k < n; ++k) {
         const float am = A[k].m, bm = B[k].m;
@@ -103,6 +112,9 @@ inline void batchAddScores(const ExpScore *A, const ExpScore *B, ExpScore *out, 
 // Non-positive or non-finite factors, and zero inputs, yield zero. Equal to
 // scaleScore on every lane.
 inline void batchScaleScores(const ExpScore *A, const double *f, ExpScore *out, int n) {
+#ifdef DUMMEST_POISON
+    for (int k = 0; k < n; ++k) { DUMMEST_POISON_ASSERT(!isPoisonScore(A[k])); DUMMEST_POISON_ASSERT(!std::isnan(f[k])); }
+#endif
 #pragma GCC ivdep
     for (int k = 0; k < n; ++k) {
         const bool a0 = (A[k].m == 0.0f);
@@ -127,14 +139,26 @@ inline void batchScaleScores(const ExpScore *A, const double *f, ExpScore *out, 
 static_assert(sizeof(int) == 4, "plane kernels assume 32-bit int lanes");
 
 // Promote Float lanes to (mantissa, exponent) pairs, folding in a per-lane
-// 2^64*cum rescale factor so the result is at static scale. This is the
+// 2^(RESCALE_BITS*cum) rescale factor so the result is at static scale. This is the
 // lane-wise equivalent of promoteRescaledScore: zero/NaN/non-positive lanes
 // become zero, +inf saturates, subnormals flush. A full float batch uses an
 // AVX2 bit-trick path; everything else falls back to the scalar form.
 inline void batchPromoteRescaled(const Float *in, const int *cum, float *mOut, int *eOut, int n) {
+#ifdef DUMMEST_POISON
+    // Fail fast on poison BEFORE the AVX2 bit-trick below, which would hide
+    // NaN lanes as zero (isNan -> zero branch). Poison cum counts also abort
+    // here instead of being clamped inside promoteRescaledScore.
+    for (int k = 0; k < n; ++k) {
+        DUMMEST_POISON_ASSERT(!dummestIsPoisonFloat(in[k]));
+        DUMMEST_POISON_ASSERT(!dummestIsPoisonInt(cum[k]));
+    }
+#endif
     if constexpr (sizeof(Float) == 4) {
         if (n == (int)simdWidth) {
-#if defined(__AVX2__)
+// The AVX2 bit-trick hardcodes the production 64-bit rescale quantum
+// (slli by 6); under AUDIT_FORCE_RESCALE fall through to the scalar
+// oracle below, which honors RESCALE_BITS.
+#if defined(__AVX2__) && !defined(AUDIT_FORCE_RESCALE)
         // Dead at runtime unless Float is 32-bit (see outer guard); the cast
         // keeps the branch compilable in DOUBLE builds.
         __m256 x = _mm256_loadu_ps((const float *)in);
@@ -191,6 +215,12 @@ inline void batchPromoteRescaled(const Float *in, const int *cum, float *mOut, i
 // product. Zero lanes yield zero. Equal to batchMulScores on every lane.
 inline void batchMulScorePlanes(const float *am, const int *ae, const float *bm, const int *be,
                        int eFold, float *mo, int *eo, int n) {
+#ifdef DUMMEST_POISON
+    for (int k = 0; k < n; ++k) {
+        DUMMEST_POISON_ASSERT(!dummestIsPoisonMantissa(am[k]) && !dummestIsPoisonMantissa(bm[k]));
+        DUMMEST_POISON_ASSERT(!dummestIsPoisonInt(ae[k]) && !dummestIsPoisonInt(be[k]));
+    }
+#endif
 #pragma GCC ivdep
     for (int k = 0; k < n; ++k) {
         const bool nz = (am[k] != 0.0f) & (bm[k] != 0.0f);

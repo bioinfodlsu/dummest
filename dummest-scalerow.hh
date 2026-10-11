@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 
-// Row-scaled float compute for the deferred prefix- and suffix-optimal
+// Row-scaled float compute for the post-gate prefix- and suffix-optimal
 // rebuilds. The rebuilds take a maximum over candidate scores, so instead of
 // carrying each candidate as an ExpScore through the max chain, every
 // candidate is shifted to one shared row exponent E, compared as plain
@@ -24,6 +24,8 @@
 // returns 0. The shift changes only the exponent field, so nonzero results
 // are exact (no rounding).
 inline float scoreToRowScale(float m, int e, int E) {
+    DUMMEST_POISON_ASSERT(!dummestIsPoisonMantissa(m));
+    DUMMEST_POISON_ASSERT(!dummestIsPoisonInt(e) && !dummestIsPoisonInt(E));
     uint32_t u;
     std::memcpy(&u, &m, 4);
     int d = e - E;
@@ -39,6 +41,8 @@ inline float scoreToRowScale(float m, int e, int E) {
 // folding the row exponent E back in. This is an exact frexp replication.
 // A zero or subnormal result maps to the zero sentinel.
 inline ExpScore scoreFromRowScale(float s, int E) {
+    DUMMEST_POISON_ASSERT(!dummestIsPoisonFloat(s));
+    DUMMEST_POISON_ASSERT(!dummestIsPoisonInt(E));
     uint32_t u;
     std::memcpy(&u, &s, 4);
     uint32_t ef = (u >> 23) & 0xFFu;

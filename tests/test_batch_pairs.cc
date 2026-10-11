@@ -130,7 +130,15 @@ int main() {
                 if (pick == 0) c = (Float)0.0;
                 else if (pick == 1) c = -(Float)v;
                 else if (pick == 2) c = (Float)INFINITY;
-                else if (pick == 3) c = (Float)NAN;
+                else if (pick == 3) {
+#ifdef DUMMEST_POISON
+                    // NaN is the poison sentinel: it aborts in the helpers
+                    // (tested separately below), so never feed it here.
+                    c = (Float)0.0;
+#else
+                    c = (Float)NAN;
+#endif
+                }
                 else if (pick == 4) c = (Float)1e-40; // subnormal in float
                 in[k] = c;
                 cum[k] = cumDist(rng);
@@ -260,6 +268,76 @@ int main() {
         for (int k = 0; k < W; ++k) {
             Float w = (k < active) ? scoreToFloatClamped(arr[k]) : (Float)0.0;
             CHECK(laneOf(p, k) == w, "pack k=%d", k);
+        }
+    }
+
+    // Poison sentinels: shape + detectability (no asserts fired here -- these
+    // checks only verify the sentinel values; abort-on-read is exercised by
+    // the DUMMEST_POISON DP integration test, tests/test_poison.sh).
+    {
+        // Float lanes: quiet NaN under poison, zero otherwise.
+        Float pf = dummestPoisonFloat<Float>();
+#ifdef DUMMEST_POISON
+        CHECK(std::isnan(pf), "poison float is NaN");
+        CHECK(dummestIsPoisonFloat(pf), "poison float detected");
+        CHECK(!dummestIsPoisonFloat((Float)0.0), "zero not poison");
+        CHECK(!dummestIsPoisonFloat((Float)1.5), "1.5 not poison");
+#else
+        CHECK(pf == (Float)0.0, "non-poison float is zero");
+        CHECK(!dummestIsPoisonFloat(pf), "non-poison never poison");
+#endif
+        // ExpScore: {NaN, INT_MAX} under poison, {0,0} otherwise.
+        ExpScore ps = poisonScore();
+#ifdef DUMMEST_POISON
+        CHECK(std::isnan(ps.m) && ps.e == INT32_MAX, "poison score shape");
+        CHECK(isPoisonScore(ps), "poison score detected");
+        CHECK(!isPoisonScore(ExpScore{0.0f, 0}), "zero not poison");
+        CHECK(!isPoisonScore(ExpScore{0.75f, 3}), "normal not poison");
+#else
+        CHECK(ps.m == 0.0f && ps.e == 0, "non-poison score is zero");
+        CHECK(!isPoisonScore(ps), "non-poison never poison");
+#endif
+        // int fields.
+        CHECK(!dummestIsPoisonInt(0) && !dummestIsPoisonInt(-1) && !dummestIsPoisonInt(42),
+              "small ints not poison");
+#ifdef DUMMEST_POISON
+        CHECK(dummestIsPoisonInt(dummestPoisonInt()), "poison int detected");
+#endif
+        // W1-style uninitialized matrix poisons its logical range (pads are
+        // poisoned too; the DP explicitly zeroes the seed row/tails after).
+#ifdef DUMMEST_POISON
+        {
+            Matrix<simd_t, 0, 0> U;
+            U.resizeNoFill(2, 4);
+            for (size_t i = 0; i < 2; ++i)
+                for (int j = 0; j < 4; ++j) {
+                    alignas(64) Float buf[simdWidth];
+                    Kokkos::Experimental::simd_unchecked_store(U.get(i, j), buf,
+                        Kokkos::Experimental::simd_flag_default);
+                    for (int k = 0; k < W; ++k)
+                        CHECK(std::isnan(buf[k]), "W1 poison %d %d %d", (int)i, j, k);
+                }
+            // Explicit seed zeroing still works on top of poison.
+            simd_t z = VecTraits<simd_t>::zero();
+            U.fillRow(1, z);
+            for (int j = 0; j < 4; ++j) {
+                alignas(64) Float buf[simdWidth];
+                Kokkos::Experimental::simd_unchecked_store(U.get(1, j), buf,
+                    Kokkos::Experimental::simd_flag_default);
+                for (int k = 0; k < W; ++k) CHECK(buf[k] == (Float)0.0, "fillRow zero");
+            }
+        }
+#endif
+        // VecTraits::poison() splats NaN (zero without poison).
+        {
+            simd_t v = VecTraits<simd_t>::poison();
+            for (int k = 0; k < W; ++k) {
+#ifdef DUMMEST_POISON
+                CHECK(std::isnan(laneOf(v, k)), "vectraits poison k=%d", k);
+#else
+                CHECK(laneOf(v, k) == (Float)0.0, "vectraits non-poison zero k=%d", k);
+#endif
+            }
         }
     }
 

@@ -222,11 +222,52 @@ void findFinalSimilaritiesBatched(const std::vector<Sequence> &sequences,
             for (int k = 0; k < job.activeCount; ++k) {
                 curBatch[k] = requests[job.startRequestIdx + k];
             }
+            int useActive = job.activeCount;
+            // Debug-only truncated-lane mode (poison harness): duplicate lane
+            // 0's sequence across all SIMD lanes with staggered prefix
+            // truncations, so a single-sequence input exercises dpWidth=max
+            // with many distinct past-end cutoffs (activeMask, j>=len guards,
+            // per-lane null seeds). Prefix truncation keeps every lane's
+            // anchors valid prefix coordinates, so traceback display and
+            // contig mapping need no changes. Runtime-gated by
+            // DUMMEST_TRUNC_LANES=1 (same env-knob pattern as
+            // DUMMEST_MAX_LANES); inert when unset. Intentionally NOT
+            // ifdef-gated: both normal and poison test builds truncate
+            // identically (pure function of L and k), so normal-vs-poison
+            // output comparison stays valid.
+            static const bool truncLanes = [] {
+                const char *e = getenv("DUMMEST_TRUNC_LANES");
+                return e && *e && strcmp(e, "0") != 0;
+            }();
+            // Owned per-thread copies: requests share SequenceData, so
+            // truncation needs distinct decoded vectors with DP-call lifetime.
+            thread_local std::array<std::shared_ptr<SequenceData>, simdWidth> truncHold;
+            if (truncLanes && job.activeCount >= 1) {
+                const auto &src = curBatch[0].seqData;
+                const size_t L = src->decoded.size();
+                constexpr size_t kTruncMin = 16; // well above size>=3 asserts + codon floors
+                if (L > kTruncMin + simdWidth) {
+                    const size_t step = std::max<size_t>(1, (L - kTruncMin) / simdWidth);
+                    for (size_t k = 0; k < simdWidth; ++k) {
+                        const size_t Lk = L - k * step; // k==0 keeps full length
+                        auto d = std::make_shared<SequenceData>();
+                        d->decoded.assign(src->decoded.begin(), src->decoded.begin() + Lk);
+                        d->sequence = src->sequence;
+                        d->maskedSequence = src->maskedSequence;
+                        d->contig = src->contig;
+                        d->strandNum = src->strandNum;
+                        truncHold[k] = d;
+                        curBatch[k].seqData = d;
+                        curBatch[k].minProbRatio = curBatch[0].minProbRatio;
+                    }
+                    useActive = (int)simdWidth;
+                }
+            }
 
             std::vector<FinalSimilarity> jobSimilarities;
             findFinalSimilarities(jobSimilarities, curBatch,
                                   profiles[job.profileIdx], job.profileIdx,
-                                  charVec, threadScratch, job.activeCount);
+                                  charVec, threadScratch, useActive);
 
             printSims(jobSimilarities);
 

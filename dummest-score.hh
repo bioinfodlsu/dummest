@@ -1,20 +1,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Score layer: overflow-proof ExpScore values plus the scalar arithmetic,
-// rescaling bookkeeping, and packing used by the DP and traceback.
-//
-// An ExpScore represents a non-negative real as a normalized pair (m, e):
-// value = m * 2^e, where m is in [0.5, 1) or m == 0 (the zero sentinel).
-// The exponent is a full int, so values far outside double range stay
-// finite and exactly ordered; the float mantissa fixes ~2^-24 relative
-// precision. Arithmetic is carried out in double and narrowed on store.
-//
-// Rescaling: to keep the Float DP lanes finite, any row/lane whose magnitude
-// crosses RESCALE_THRESH is divided by 2^64 and its cumulative count is
-// incremented; promoteRescaledScore/rowRescaleVector undo that exactly.
-//
-// Requires Float, simd_t, and simdWidth (defined by dummest-core.hh from the
-// DOUBLE switch and the Kokkos SIMD type).
+// Score layer: scores that never overflow, plus row-halving helpers.
+// A score is m * 2^e with m in [0.5, 1) or 0 for zero.
+// Rows that grow too large are halved and counted;
+// the helpers below undo that count exactly.
 #pragma once
 
 #include <algorithm>
@@ -30,17 +19,42 @@
 #include <immintrin.h>
 #endif
 
+#include "dummest-poison.hh"
+
 // Static downscale applied to the DP: none (1.0), combined scores use
 // mulScoresStaticShifted with zero shift (plain product).
 constexpr int STATIC_SHIFT = 0;
 
-// A non-negative score as (mantissa, exponent): value = m * 2^e with
-// m in [0.5, 1) or m == 0 meaning zero. Eight bytes so matrices stay small.
+// A score as (mantissa, exponent). Eight bytes.
 struct ExpScore {
     float m = 0.0f;
     int32_t e = 0;
 };
 static_assert(sizeof(ExpScore) == 8, "ExpScore must stay 8 bytes");
+
+// Bad-value marker. Helpers fail loudly on it instead of hiding it as zero.
+inline ExpScore poisonScore() {
+#ifdef DUMMEST_POISON
+    return ExpScore{dummestPoisonMantissa(), dummestPoisonExponent()};
+#else
+    return ExpScore{0.0f, 0};
+#endif
+}
+
+inline bool isPoisonScore(const ExpScore &a) {
+#ifdef DUMMEST_POISON
+    return dummestIsPoisonMantissa(a.m) || dummestIsPoisonExp(a.e);
+#else
+    (void)a;
+    return false;
+#endif
+}
+
+// Poison for a Float DP lane (quiet NaN). Helpers that consume Float lanes
+// assert on NaN under DUMMEST_POISON; without it this is a no-op (zero).
+template <typename T> inline T poisonFloatLane() { return dummestPoisonFloat<T>(); }
+
+inline bool isPoisonFloatLane(Float v) { return dummestIsPoisonFloat(v); }
 
 // Normalize a non-negative real x into an ExpScore: split x into a mantissa
 // in [0.5, 1) and a power of two, folded with e. x == 0 gives the zero
@@ -52,19 +66,28 @@ inline ExpScore normalizeScore(double m, int e) {
     return ExpScore{(float)m, e + ex};
 }
 
-// Order two scores by their real value; the zero sentinel sorts below any
-// positive score.
+// Order two scores. Zero sorts below anything positive.
 inline bool scoreLess(const ExpScore &a, const ExpScore &b) {
+    DUMMEST_POISON_ASSERT(!isPoisonScore(a) && !isPoisonScore(b));
     if (a.m == 0.0f) return b.m != 0.0f;
     if (b.m == 0.0f) return false;
     if (a.e != b.e) return a.e < b.e;
     return a.m < b.m;
 }
 
-// One dynamic rescale step, exactly 2^-64 (written via ldexp rather than a
-// product of 0.5 literals so no rounding can creep in).
-const Float RESCALE_STEP = std::ldexp((Float)1.0, -64); // 2^-64
-#ifdef DOUBLE
+// Halve step, always an exact power of two.
+// Audit builds use a small step so tiny tests trigger halves.
+#ifdef AUDIT_FORCE_RESCALE
+constexpr int RESCALE_BITS = 8;
+#else
+constexpr int RESCALE_BITS = 64;
+#endif
+// One dynamic rescale step, exactly 2^-RESCALE_BITS (written via ldexp rather
+// than a product of 0.5 literals so no rounding can creep in).
+const Float RESCALE_STEP = std::ldexp((Float)1.0, -RESCALE_BITS);
+#ifdef AUDIT_FORCE_RESCALE
+const Float RESCALE_THRESH = (Float)0.5; // fires a few times on tiny-model magnitudes
+#elif defined(DOUBLE)
 const Float RESCALE_THRESH = (Float)1e150; // well below 1e308, headroom for intra-row growth
 #else
 const Float RESCALE_THRESH = (Float)1e30; // well below 3.4e38, headroom for intra-row growth
@@ -73,40 +96,39 @@ const Float RESCALE_THRESH = (Float)1e30; // well below 3.4e38, headroom for int
 // Bound a cumulative rescale counter so the exponent arithmetic cannot
 // overflow int. The bound is far past any real DP size.
 inline int clampRescaleCount(int cum) {
+    DUMMEST_POISON_ASSERT(!dummestIsPoisonInt(cum));
     if (cum > 1000000) return 1000000;
     if (cum < -1000000) return -1000000;
     return cum;
 }
 
-// Convert a stored (rescaled) Float lane back to static-scale units:
-// value = v * 2^(64*cum), where cum is the number of 2^-64 rescalings that
-// row/lane has accumulated. Non-positive input (including NaN) becomes zero;
-// a +inf lane (one that overflowed before a rescale could fire) saturates to
-// the largest finite score at that lane's exponent, preserving its ordering
-// without letting +inf enter pair arithmetic.
+// Convert a stored halved lane back. Bad input gives zero;
+// overflow gives the largest finite score.
 inline ExpScore promoteRescaledScore(Float v, int cum) {
+    // Bad values must fail here, not hide as zero.
+    DUMMEST_POISON_ASSERT(!dummestIsPoisonFloat(v));
+    DUMMEST_POISON_ASSERT(!dummestIsPoisonInt(cum));
     if (!(v > 0)) return ExpScore{0.0f, 0};
     cum = clampRescaleCount(cum);
     // Largest float strictly below 1 (0.9999999999999999 rounds to 1.0f).
-    if (!(v < (Float)INFINITY)) return ExpScore{std::nextafterf(1.0f, 0.0f), 1023 + 64 * cum};
-    return normalizeScore((double)v, 64 * cum);
+    if (!(v < (Float)INFINITY)) return ExpScore{std::nextafterf(1.0f, 0.0f), 1023 + RESCALE_BITS * cum};
+    return normalizeScore((double)v, RESCALE_BITS * cum);
 }
 
-// Multiply one DP row in place by a per-lane factor. Each factor lane is
-// 1.0 or an exact power of two, so the operation is exact in binary FP.
+// Multiply one row in place. Each factor is 1 or an exact halve, so exact.
 inline void rescaleRow(simd_t *base, int lo, int hi, simd_t factor) {
     for (int j = lo; j < hi; ++j) base[j] *= factor;
 }
 
-// Decide which lanes of DP row i must be rescaled. A lane whose row maximum
-// exceeds RESCALE_THRESH gets factor 2^-64 and its cumulative counter is
-// bumped; the others get 1.0. Returns the per-lane factor and whether any
-// lane triggered. A NaN maximum triggers nothing.
+// Pick rows to halve. Returns the halve factors and whether any fired.
 inline std::pair<simd_t, bool> makeRowRescaleFactor(std::vector<std::array<int, simdWidth>> &cum, int i,
                                                   const Float *maxArr, int activeCount) {
     alignas(64) Float fbuf[simdWidth];
     bool any = false;
     for (int k = 0; k < activeCount; ++k) {
+        // Bad maxima must not hide as "no halve".
+        DUMMEST_POISON_ASSERT(!dummestIsPoisonFloat(maxArr[k]));
+        DUMMEST_POISON_ASSERT(!dummestIsPoisonInt(cum[i][k]));
         if (maxArr[k] > RESCALE_THRESH) {
             cum[i][k]++;
             fbuf[k] = RESCALE_STEP;
@@ -119,36 +141,33 @@ inline std::pair<simd_t, bool> makeRowRescaleFactor(std::vector<std::array<int, 
     return {Kokkos::Experimental::simd_unchecked_load<simd_t>(fbuf), any};
 }
 
-// Per-lane factor 2^(-64*cum) that maps row-scale values back to static
-// scale, for the effective static scale of a DP row.
+// Halve factor that maps stored rows back.
 inline simd_t rowRescaleVector(const std::array<int, simdWidth> &cum) {
     alignas(64) Float a[simdWidth];
     for (int k = 0; k < (int)simdWidth; k++) {
-        a[k] = std::ldexp((Float)1.0, -64 * clampRescaleCount(cum[k]));
+        DUMMEST_POISON_ASSERT(!dummestIsPoisonInt(cum[k]));
+        a[k] = std::ldexp((Float)1.0, -RESCALE_BITS * clampRescaleCount(cum[k]));
     }
     return Kokkos::Experimental::simd_unchecked_load<simd_t>(a);
 }
 
-// Multiply a score by a finite non-negative scalar factor (an O(1) constant
-// such as a background or emission probability). A non-positive or
-// non-finite factor produces the zero sentinel.
+// Multiply by a plain number. Bad factor gives zero.
 inline ExpScore scaleScore(const ExpScore &a, double f) {
+    DUMMEST_POISON_ASSERT(!isPoisonScore(a));
     if (a.m == 0.0f) return ExpScore{0.0f, 0};
     if (!(f > 0.0) || !std::isfinite(f)) return ExpScore{0.0f, 0};
     return normalizeScore((double)a.m * f, a.e);
 }
 
-// Product of two scores with the fixed DP downscale undone:
-// (a * b) * 2^STATIC_SHIFT. This is the combined-score formation used for
-// comparison and selection.
+// Product of two scores. Used for match scores.
 inline ExpScore mulScoresStaticShifted(const ExpScore &a, const ExpScore &b) {
+    DUMMEST_POISON_ASSERT(!isPoisonScore(a) && !isPoisonScore(b));
     return normalizeScore((double)a.m * (double)b.m, a.e + b.e + STATIC_SHIFT);
 }
 
-// Sum of two scores. An addend more than 60 binary exponents below the other
-// is dropped: its relative contribution is under 2^-60, below the result's
-// representable precision.
+// Sum of two scores. A piece far below the other is dropped.
 inline ExpScore addScores(ExpScore a, ExpScore b) {
+    DUMMEST_POISON_ASSERT(!isPoisonScore(a) && !isPoisonScore(b));
     if (a.m == 0.0f) return b;
     if (b.m == 0.0f) return a;
     if (a.e >= b.e) {
@@ -161,27 +180,27 @@ inline ExpScore addScores(ExpScore a, ExpScore b) {
     return normalizeScore((double)b.m + std::ldexp((double)a.m, -d), b.e);
 }
 
-// Plain product of two scores, with no scale adjustment; used by standalone
-// probability recursions such as the null model.
+// Plain product, no extra shift. Used for background odds.
 inline ExpScore mulScores(const ExpScore &a, const ExpScore &b) {
+    DUMMEST_POISON_ASSERT(!isPoisonScore(a) && !isPoisonScore(b));
     if (a.m == 0.0f || b.m == 0.0f) return ExpScore{0.0f, 0};
     return normalizeScore((double)a.m * (double)b.m, a.e + b.e);
 }
 
-// Arithmetic operators so the DP body can use *, +, <, > uniformly on scores
-// without special-casing the representation.
+// Lets the DP write a * b, a + b, a < b directly.
 inline ExpScore operator*(const ExpScore &a, const ExpScore &b) { return mulScores(a, b); }
 inline ExpScore operator+(const ExpScore &a, const ExpScore &b) { return addScores(a, b); }
 inline bool operator<(const ExpScore &a, const ExpScore &b) { return scoreLess(a, b); }
 inline bool operator>(const ExpScore &a, const ExpScore &b) { return scoreLess(b, a); }
 
-// The exact power of two 2^e2 as a score (mantissa 0.5); e2 == 0 is 1.0.
+// The exact power 2^e2. e2 == 0 is 1.0.
 inline ExpScore pow2Score(int e2) {
     return ExpScore{0.5f, e2 + 1};
 }
 
 // Natural logarithm of the value; -inf for the zero sentinel.
 inline double scoreToLog(const ExpScore &a) {
+    DUMMEST_POISON_ASSERT(!isPoisonScore(a));
     if (a.m == 0.0) return -INFINITY;
     static const double LN2 = 0.6931471805599453;
     return std::log(a.m) + (double)a.e * LN2;
@@ -189,6 +208,7 @@ inline double scoreToLog(const ExpScore &a) {
 
 // Base-2 logarithm of the value; -inf for the zero sentinel.
 inline double scoreToLog2(const ExpScore &a) {
+    DUMMEST_POISON_ASSERT(!isPoisonScore(a));
     if (a.m == 0.0) return -INFINITY;
     return std::log2((double)a.m) + (double)a.e;
 }
@@ -202,6 +222,7 @@ const Float EXP2_HI = (Float)120; // exp2 overflow boundary for float
 // Materialize a score as Float, clamping the exponent at the exp2 overflow
 // boundary so degenerate input cannot produce +inf.
 inline Float scoreToFloatClamped(const ExpScore &a) {
+    DUMMEST_POISON_ASSERT(!isPoisonScore(a));
     if (a.m == 0.0f) return (Float)0.0;
     int e = a.e;
     if (e > (int)EXP2_HI) e = (int)EXP2_HI;

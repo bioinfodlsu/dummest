@@ -17,12 +17,27 @@ template <> struct VecTraits<simd_t> {
     // An all-zero lane vector.
     static inline simd_t zero() { return simd_t((Float)0.0); }
 
+    // Poison lane vector (quiet NaN per lane). Only filled into scratch that
+    // must be overwritten before any read; any surviving lane aborts in the
+    // promote/score helpers. No-op (zero) without DUMMEST_POISON so call sites
+    // compile unchanged.
+    static inline simd_t poison() {
+#ifdef DUMMEST_POISON
+        return simd_t(dummestPoisonFloat<Float>());
+#else
+        return simd_t((Float)0.0);
+#endif
+    }
+
     // Splat one scalar value across every lane.
     static inline simd_t broadcast(Float v) { return simd_t(v); }
 
     // Materialize scores as Float lanes, each exponent clamped so degenerate
     // input stays finite. Lanes at or beyond activeCount are zero.
     static inline simd_t packScores(const ExpScore *arr, int activeCount) {
+#ifdef DUMMEST_POISON
+        for (int k = 0; k < activeCount; k++) { DUMMEST_POISON_ASSERT(!isPoisonScore(arr[k])); }
+#endif
         alignas(64) Float buf[simdWidth];
         for (size_t k = 0; k < (size_t)simdWidth; k++)
             buf[k] = ((int)k < activeCount) ? scoreToFloatClamped(arr[k]) : (Float)0.0;
