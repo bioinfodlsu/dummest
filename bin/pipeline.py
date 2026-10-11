@@ -154,6 +154,9 @@ def main():
     parser.add_argument("--trials", dest="trials", type=int, default=None,
                         help="DUMMEST calibration random sequences (-t). "
                              "Default: dummest default (1000).")
+    parser.add_argument("--length", "-l", dest="length", type=int, default=None,
+                        help="DUMMEST calibration random sequence length (-l). "
+                             "Default: dummest default (5000).")
 
     args = parser.parse_args()
 
@@ -176,12 +179,16 @@ def main():
         parser.error("--batch must be >= 1")
     if args.trials is not None and args.trials < 1:
         parser.error("--trials must be >= 1")
+    if args.length is not None and args.length < 1:
+        parser.error("--length must be >= 1")
 
     dummer_extra_args = []
     if args.batch is not None:
         dummer_extra_args += ["--batch", str(args.batch)]
     if args.trials is not None:
         dummer_extra_args += ["-t", str(args.trials)]
+    if args.length is not None:
+        dummer_extra_args += ["-l", str(args.length)]
     if args.insert1 is not None:
         dummer_extra_args += ["--insert1", str(args.insert1)]
     if args.insert2 is not None:
