@@ -231,7 +231,6 @@ public:
     }
 private:
     std::unordered_map<std::string, CacheEntry> entries;
-    //std::unordered_set<std::string> read_entries;
     std::filesystem::path cacheFilePath;
     std::string binaryHash = getBinaryHash();
     std::mutex cacheMutex;
@@ -323,10 +322,6 @@ public:
     void save() {
         std::scoped_lock lock(cacheMutex);
         load();
-
-        // std::erase_if(entries, [&](const auto& pair) {
-        //     return read_entries.find(pair.first) == read_entries.end();
-        // });
 
         try {
             std::ofstream out(cacheFilePath, std::ios::binary | std::ios::trunc);

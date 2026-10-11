@@ -3,4 +3,4 @@ DUMMEST (DUMMER without Explicit Sequence Translation) finds similar regions bet
 
 For installation and usage guide, please visit the [wiki](https://github.com/bioinfodlsu/dummest/wiki).
 
-If you have questions, concerns, issues, please contact: Harvey Chua (**TODO** add email)
+If you have questions, concerns, issues, please contact: Harvey Chua (harvey.shawn.chua@gmail.com)

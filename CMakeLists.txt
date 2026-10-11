@@ -74,7 +74,15 @@ option(DUMMEST_SKIP_BIN_COPY "Skip copying built binaries to bin/" OFF)
 # from poison runs are still valid scores, but keep caches separate anyway).
 option(DUMMEST_POISON "Fill uninitialized DP scratch with NaN poison (debug only)" OFF)
 
-add_executable(dummest dummest.cc dummest-util.hh dummest-score.hh dummest-poison.hh dummest-batch.hh dummest-scalerow.hh dummest-vectraits.hh dummest-padded.hh dummest-core.hh dummest-sequence.hh dummest-output.hh dummest-dp.hh dummest-traceback.hh dummest-dp-backward.hh dummest-dp-forward.hh dummest-search.hh dummest-calibration.hh dummest-profile.hh tantan-wrapper.hh version.hh can_i_haz_simd.hh)
+set(DUMMEST_SOURCES
+    dummest.cc dummest-util.hh dummest-score.hh dummest-poison.hh dummest-batch.hh
+    dummest-scalerow.hh dummest-vectraits.hh dummest-padded.hh dummest-core.hh
+    dummest-sequence.hh dummest-output.hh dummest-dp.hh dummest-traceback.hh
+    dummest-dp-backward.hh dummest-dp-forward.hh dummest-search.hh
+    dummest-calibration.hh dummest-profile.hh tantan-wrapper.hh version.hh
+    can_i_haz_simd.hh)
+
+add_executable(dummest ${DUMMEST_SOURCES})
 target_compile_definitions(dummest PRIVATE DOUBLE FILTER_PASS)
 target_include_directories(dummest PRIVATE "${CMAKE_SOURCE_DIR}/include")
 target_link_libraries(dummest Kokkos::kokkos)
@@ -84,7 +92,7 @@ add_custom_command(TARGET dummest POST_BUILD
         $<TARGET_FILE:dummest> "${CMAKE_SOURCE_DIR}/bin/dummest")
 endif()
 
-add_executable(dummestl dummest.cc dummest-util.hh dummest-score.hh dummest-poison.hh dummest-batch.hh dummest-scalerow.hh dummest-vectraits.hh dummest-padded.hh dummest-core.hh dummest-sequence.hh dummest-output.hh dummest-dp.hh dummest-traceback.hh dummest-dp-backward.hh dummest-dp-forward.hh dummest-search.hh dummest-calibration.hh dummest-profile.hh tantan-wrapper.hh version.hh can_i_haz_simd.hh)
+add_executable(dummestl ${DUMMEST_SOURCES})
 target_compile_definitions(dummestl PRIVATE FILTER_PASS)
 target_include_directories(dummestl PRIVATE "${CMAKE_SOURCE_DIR}/include")
 target_link_libraries(dummestl Kokkos::kokkos)

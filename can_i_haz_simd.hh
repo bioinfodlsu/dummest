@@ -110,7 +110,6 @@ SimdDbl simdShiftRev(SimdDbl zOld, SimdDbl zNew) {
 SimdFlt simdCumulateFwd(SimdFlt v, SimdFlt c) {
   __m512i z = _mm512_setzero_si512();
   SimdFlt a;
-  //a = _mm512_castsi512_ps(_mm512_maskz_alignr_epi32(0xFFFE, v, v, 15);
   a = _mm512_castsi512_ps(_mm512_alignr_epi32(_mm512_castps_si512(v), z, 15));
   v = simdAdd(v, simdMul(c, a));
   c = simdMul(c, c);
