@@ -7,24 +7,10 @@ import tempfile
 import argparse
 import pybedtools
 
-_DISK_TMP_THRESHOLD = 2 * 1024**3  # 2 GiB
-
-
-def _tmp_base_dir(fa_file):
-    if os.environ.get("DUMMEST_TMP_BYPASS", "1") in ("0", "false", "False", "no"):
-        return None
-    try:
-        if os.path.getsize(fa_file) > _DISK_TMP_THRESHOLD:
-            return "."
-    except OSError:
-        pass
-    return None
-
-
 def _cache_dir():
     # Shared with dummest: $DUMMEST_CACHE_DIR, then
     # $XDG_CACHE_HOME/.dummest-cache, $HOME/.dummest-cache, ./.dummest-cache,
-    # $TMPDIR/.dummest-cache, /tmp/.dummest-cache, then the current directory.
+    # $TMPDIR/.dummest-cache, /tmp/.dummest-cache, then /tmp.
     candidates = []
     override = os.environ.get("DUMMEST_CACHE_DIR")
     if override:
@@ -48,7 +34,17 @@ def _cache_dir():
                 return d
         except OSError:
             continue
-    return os.getcwd()
+    return "/tmp"
+
+
+def _tmp_dir():
+    # Temporary workspace: defaults to the cache dir, overridable via DUMMEST_TMP.
+    # A DUMMEST_TMP override is assumed writable (the caller fails loudly if not).
+    override = os.environ.get("DUMMEST_TMP")
+    if override:
+        os.makedirs(override, exist_ok=True)
+        return override
+    return _cache_dir()
 
 
 def _gpu_available():
@@ -212,9 +208,8 @@ def main():
         calib_dir = _cache_dir()
         args.ungapped_calib = os.path.join(calib_dir, "ungappedcalib.tsv")
 
-    tmp_parent = _tmp_base_dir(fa_file)
-    if tmp_parent:
-        print("# Genome >2GB, using CWD for temp instead of /tmp")
+    tmp_parent = _tmp_dir()
+    print(f"# Temporary directory base: {tmp_parent}")
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
     dummer_exec = args.dummer_bin or os.path.join(script_dir, "../bin/dummestl")
@@ -263,7 +258,7 @@ def main():
     # --max mode: skip mmseqs2, run dummer directly on all profiles x contigs
     # ---------------------------------------------------------
     if args.max:
-        _base = tmp_parent or tempfile.gettempdir()
+        _base = tmp_parent
         merged_fa_path = os.path.join(_base, f"dummest_max.{os.getpid()}.fa")
         trans = str.maketrans("ACGTacgt", "TGCAtgca")
 

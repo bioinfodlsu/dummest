@@ -15,9 +15,9 @@ From: ubuntu:24.04
     GPU runs (NVIDIA only) need the host driver injected with --nv:
       apptainer exec --nv dummest.sif pipeline.py profile.hmm profile.msa genome.fa 8
 
-    Inside the container the pipeline always uses /tmp; for large genomes bind
-    a disk directory over it:
-      apptainer exec --bind /host/large_tmp:/tmp dummest.sif pipeline.py ...
+    Inside the container the pipeline uses the dummest cache directory for
+    temporary scratch space. Override it, e.g. to a large disk directory:
+      apptainer exec --env DUMMEST_TMP=/host/large_tmp dummest.sif pipeline.py ...
 
     CPU-only smoke test on the bundled fixtures:
       apptainer exec dummest.sif pipeline.py /opt/dummest/samples/MET-test.hmm \
@@ -33,8 +33,6 @@ From: ubuntu:24.04
 %environment
     export LC_ALL=C
     export PATH=/usr/local/bin:$PATH
-    # Always use /tmp (bind a disk dir over it for large genomes).
-    export DUMMEST_TMP_BYPASS=0
 
 %files
     .apptainer-stage/dummest /usr/local/bin/dummest
