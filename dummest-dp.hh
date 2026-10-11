@@ -5,31 +5,29 @@
 #include "dummest-batch.hh"
 
 struct DPScratchCommon {
-    // Combined-score matrices in scalar ExpScore (never overflow).
+    // Match scores that never overflow.
     ExpMatrix<0> X;
     ExpMatrix<3> prefixOptimal;
-    // Rebuilt suffix-optimal values for forward traceback (pair domain)
+    // Best suffix scores, rebuilt for forward traceback.
     ExpMatrix<0> suffixOptimal;
 
-    // Null-model prefix/suffix probabilities in the pair domain (value =
-    // m*2^e), so the recursion is plain products/sums with no exp2/log2.
-    ExpVector<0> nullProbsPrefix, nullProbsSuffix;
-    // EV side buffers in scalar ExpScore (pair domain, never overflows):
-    // reverseSideEv needs front padding (writes j-3), forwardSideEv needs
-    // back padding (writes j+3).
+    // Background odds of each prefix/suffix under no alignment.
+    ExpVector<0> nullPrefixProbabilities, nullSuffixProbabilities;
+    // Flank totals: entry sums run forward (~ L_j / 3Pn),
+    // exit sums run backward (~ R_j / 3Pn).
     ExpVector<3> reverseSideEv;
     ExpVector<0> forwardSideEv;
     std::array<std::vector<AlignedSimilarity>, simdWidth> optProfilePosition;
     std::array<std::vector<bool>, simdWidth> aligned;
     std::vector<uint8_t> transposedDecoded;
 
-    // Per-lane anchor tracking — indexed by sequence position j.
+    // Anchor of best match per query position.
     // bestMidScore holds static-scale-unit pairs (never overflows).
     std::array<std::vector<ExpScore>, simdWidth> bestMidScore;
     std::array<std::vector<int>, simdWidth> bestMidRow;
 
-    // Per-column best trackers. Updated per lane in the hot loop;
-    // extracted into the per-lane arrays after the pass.
+    // Best score seen per column. Updated in the hot loop,
+    // copied out after the pass.
     std::vector<std::array<ExpScore, simdWidth>> bestMidScorePhys;
     std::vector<std::array<int, simdWidth>> bestMidRowPhys;
 
@@ -44,145 +42,234 @@ struct DPScratch : public DPScratchCommon {
     // 2-row rolling buffer for the lean score-only filter
     // (findSimilaritiesBackwardOnly): cache-resident, no matrix store.
     std::array<PaddedVec<simd_t, 0, 0>, 2> filterRollingW1;
-    // Log2-domain null prefix/suffix for the lean filter (rebuilt per
-    // batch; the pair-domain nullProbs* in DPScratchCommon are untouched).
-    PaddedVec<simd_t, 0, 0> filterNullProbsPrefix, filterNullProbsSuffix;
-    // Cumulative 2^-64 dynamic rescalings per (profile row, lane).
-    // Bulk buffers stay single-scale by inheritance: forwardRescaleCount[i] starts as
-    // forwardRescaleCount[i-1] (forward ascends), backwardRescaleCount[i] starts as backwardRescaleCount[i+1]
-    // (backward descends); triggers only increment the current row.
+    // How many times each row was halved to stay finite.
+    // Counts carry over: forward rows inherit from the row above,
+    // backward rows from the row below.
     std::vector<std::array<int, simdWidth>> forwardRescaleCount, backwardRescaleCount;
-    // Row-scale side products for the Float-compute rebuilds (step 5):
-    // per-row max X exponent (tracked during formation) and per-batch max
-    // side-EV exponents (scanned after each fixup). Write-only until then.
+    // Largest scores per row and per flank total. Used once
+    // to pick a safe scale for the plain-float rebuild.
     std::vector<std::array<int, simdWidth>> combinedRowMaxExp;
     std::array<int, simdWidth> reverseSideEvMaxExp, forwardSideEvMaxExp;
 
-    // Reusable temporary buffers for findSimilarities
+    // Reusable scratch for findSimilarities
     PaddedVec<simd_t, 0, 0> W0_curr, W0_next;
     PaddedVec<simd_t, 0, 0> Y0_next, Y0_curr;
-    PaddedVec<simd_t, 0, 0> nullModelPrefix, nullModelSuffix;
-    // Side accumulators (see PaddedSide): static scale only.
+    // Background odds with per-base scaling folded in.
+    // The suffix seed at j covers bases after j.
+    PaddedVec<simd_t, 0, 0> nullPrefixSeed, nullSuffixSeedFromNext;
+    // Running cut totals at one scale.
     PaddedSide<simd_t, 3, 0> reverseSide;
     PaddedSide<simd_t, 0, 3> forwardSide;
-    PaddedVec<simd_t, 4, 4> bgCodonProbs;
+    PaddedVec<simd_t, 4, 4> backgroundCodonProbabilities;
 };
 
 
 uint8_t* buildTransposedDecoded(DPScratchCommon& scratch, int dpWidth, int activeCount,
                                  int zero_idx, const std::array<std::vector<uint8_t>*, simdWidth>& decoded) {
     scratch.transposedDecoded.assign((dpWidth + 8) * simdWidth, zero_idx);
-    uint8_t* transposed_base = scratch.transposedDecoded.data() + 4 * simdWidth;
+    uint8_t* transposedSequenceBases = scratch.transposedDecoded.data() + 4 * simdWidth;
     for (int idx = 0; idx < activeCount; idx++) {
         for (size_t j = 0; j < decoded[idx]->size(); j++) {
-            transposed_base[j * simdWidth + idx] = (*decoded[idx])[j];
+            transposedSequenceBases[j * simdWidth + idx] = (*decoded[idx])[j];
         }
     }
-    return transposed_base;
+    return transposedSequenceBases;
+}
+
+// Shared setup: lengths, sideways bases, background row.
+// Empty lanes get length 0 so masks zero them.
+inline void fillSequenceLengths(int activeCount,
+        const std::array<std::vector<uint8_t>*, simdWidth> &decoded, Float *sequenceLengths) {
+    for (int k = 0; k < activeCount; k++) {
+        assert((int)decoded[k]->size() >= 3);
+        sequenceLengths[k] = (Float)decoded[k]->size();
+    }
+    for (int k = activeCount; k < (int)simdWidth; k++) sequenceLengths[k] = 0;
+}
+
+inline uint8_t *buildBatchTransposed(DPScratchCommon &scratch, const Profile &profile,
+        int activeCount, int dpWidth, const std::array<std::vector<uint8_t>*, simdWidth> &decoded) {
+    int alphabetSize = profile.width - nonLetterWidth;
+    int zero_idx = alphabetSize + 4; // padded index that maps to 0.0
+    return buildTransposedDecoded(scratch, dpWidth, activeCount, zero_idx, decoded);
+}
+
+inline void fillBackgroundCodon(DPScratch &scratch, const Profile &profile,
+        const uint8_t *transposedSequenceBases, int dpWidth) {
+    const Float *backgroundProbs = profile.bg_probs.data() + 4;
+    scratch.backgroundCodonProbabilities.resize(dpWidth);
+    // Covers [-4, dpWidth+4).
+    simd_t* backgroundCodonBase = scratch.backgroundCodonProbabilities.data();
+    for (int j = -4; j < dpWidth + 4; j++) {
+        const char* indices = (const char*)&transposedSequenceBases[j * simdWidth];
+        backgroundCodonBase[j] = VecTraits<simd_t>::lookupBg(backgroundProbs, indices);
+    }
 }
 
 #ifdef ALIGN
-// Unified right/left-side EV fixup over simd_t lanes.
-// `side` accumulates in simd_t arithmetic at static scale; `ev`
-// accumulates per lane in ExpScore so the nullModel multiply and
-// prefix/suffix sum can never inf before promotion.
-// step=-1 walks j descending with targets j-1/-2/-3 and an ascending prefix
-// sum; step=+1 mirrors it (targets j+1/+2/+3, descending suffix sum).
-// bgShift is the transposed_base codon offset (-2 right, +1 left).
-// seems to be a clean way of getting expected value of null-sided junctions
-// TODO: verify logic
-// TODO: the ev[j] *= nullModel term might be off by 1 idk
+// Flank totals (S4: L_j / R_j for picking the shown alignment).
+// Adds up every way to cover each outer piece with 1/2/3-base
+// tiles, starting from the cut masses. Longer tiles count
+// more (x3 for codons); the sum is divided by 3 to keep
+// match scores comparable. Entry totals add up forward,
+// exit totals backward, over the same per-base amounts.
+// The first piece at the very start uses 1/3 (S4).
+// Leftover end pieces with 1-2 bases use one 0.25 per base.
 
-template <int SPad, int SPadPost, int EPad>
-void fixupSide(PaddedSide<simd_t, SPad, SPadPost> &side, ExpVector<EPad> &ev,
-               const PaddedVec<simd_t, 0, 0> &nullModel,
-               simd_t nullEmit1, simd_t nullEmit2, simd_t nullEmit3,
-               int step, int bgShift, const uint8_t *transposed_base,
-               const Float *bg_probs_ptr, int width, int activeCount,
-               const int *cumArr = nullptr) {
-    // Per-lane null_emit triples as exact doubles (shared by the side
-    // factors below and the EV factors). Stored once per simd_t (not once per
-    // lane as before).
-    double nullEmit1Dbl[simdWidth], nullEmit2Dbl[simdWidth], nullEmit3Dbl[simdWidth];
-    {
-        alignas(64) Float b1[simdWidth], b2[simdWidth], b3[simdWidth];
-        simd_unchecked_store(nullEmit1, b1, Kokkos::Experimental::simd_flag_default);
-        simd_unchecked_store(nullEmit2, b2, Kokkos::Experimental::simd_flag_default);
-        simd_unchecked_store(nullEmit3, b3, Kokkos::Experimental::simd_flag_default);
-        for (int k = 0; k < activeCount; k++) {
-            nullEmit1Dbl[k] = (double)b1[k];
-            nullEmit2Dbl[k] = (double)b2[k];
-            nullEmit3Dbl[k] = (double)b3[k];
-        }
-    }
-    const double c0base = (double)(Float)(1 - BACKGROUND_FRAMESHIFT_RATE - BACKGROUND_FRAMESHIFT_RATE_2);
-    const double c1base = (double)(Float)(BACKGROUND_FRAMESHIFT_RATE * 0.25);
-    const double c2base = (double)(Float)(BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625);
-    // Per-lane junction fractions for the ±1/±2 targets (j-invariant).
-    double f1A[simdWidth], f2A[simdWidth];
-    for (int k = 0; k < activeCount; k++) {
-        f1A[k] = c1base * nullEmit1Dbl[k] * (1.0 / 3.0);
-        f2A[k] = c2base * nullEmit2Dbl[k] * (2.0 / 3.0);
-    }
-    simd_t c0v = VecTraits<simd_t>::broadcast((Float)(1 - BACKGROUND_FRAMESHIFT_RATE - BACKGROUND_FRAMESHIFT_RATE_2));
-    simd_t c1v = VecTraits<simd_t>::broadcast((Float)(BACKGROUND_FRAMESHIFT_RATE * 0.25));
-    simd_t c2v = VecTraits<simd_t>::broadcast((Float)(BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625));
-    simd_t vzero = VecTraits<simd_t>::zero();
-    for (int j = step < 0 ? width - 1 : 0; (step < 0) ? (j >= 0) : (j < width); j += step) {
-        const char *indices = (const char *)&transposed_base[(j + bgShift) * simdWidth];
-        simd_t bgCodonEmitProbs = VecTraits<simd_t>::lookupBg(bg_probs_ptr, indices);
+// Wrap one background-scaled value as a score.
+inline ExpScore pairScoreFromFloat(Float value) { return normalizeScore((double)value, 0); }
 
-        side[j + 3 * step] = side[j + 3 * step] + c0v * bgCodonEmitProbs * nullEmit3 * side[j];
-        side[j + 1 * step] = side[j + 1 * step] + c1v * nullEmit1 * side[j];
-        side[j + 2 * step] = side[j + 2 * step] + c2v * nullEmit2 * side[j];
+// Convert one stored cut total back using its row's halve count.
+inline ExpScore promoteColumnMassToPair(const simd_t &columnMass, int laneIndex, const int *rescaleCounts) {
+    alignas(64) Float buffer[simdWidth];
+    simd_unchecked_store(columnMass, buffer, Kokkos::Experimental::simd_flag_default);
+    return promoteRescaledScore(buffer[laneIndex], rescaleCounts[laneIndex]);
+}
 
-        // EV side in the pair domain, batched (no per-lane stores/frexp):
-        // one store per simd_t, libm-free kernels, same op order. Exact.
-        // side[j] sits at the row scale recorded in cumArr (kept there by
-        // rescaling on every trigger); fold 2^(64*cum) into the exponent.
-        ExpScore S[simdWidth];
-        double f0[simdWidth], nmD[simdWidth];
+// Background odds of the codon starting here.
+// Past the end reads as 0.
+inline ExpScore backgroundCodonProbabilityAt(const uint8_t *transposedSequenceBases, const Float *backgroundPerBase,
+                               int position, int laneIndex) {
+    uint8_t byte = transposedSequenceBases[position * simdWidth + laneIndex];
+    return pairScoreFromFloat(backgroundPerBase[byte]);
+}
+
+template <int SPad, int SPadPost>
+void buildFlankEVs(PaddedSide<simd_t, SPad, SPadPost> &forwardColumnAccumulator,
+                   PaddedSide<simd_t, 3, 0> &backwardColumnAccumulator,
+                   ExpVector<0> &exitFlankSums, ExpVector<3> &entryFlankSums,
+                   const PaddedVec<simd_t, 0, 0> &nullPrefixSeed,
+                   simd_t scaleOneNucleotide, simd_t scaleTwoNucleotide, simd_t scaleCodon,
+                   const uint8_t *transposedSequenceBases, const Float *backgroundPerBase,
+                    int dpWidth, int activeCount, const int *sequenceLengths,
+                    const int *forwardRescaleCounts, const int *backwardRescaleCounts,
+                    double singleShiftRate, double doubleShiftRate,
+                    const bool *laneHit) {
+    const double codonKeepProbability = 1.0 - singleShiftRate - doubleShiftRate;
+    const double frameChoiceProbability = 1.0 / 3.0;
+    const double oneThirdWeight = 1.0 / 3.0;
+    const ExpScore zeroScore{0.0f, 0};
+    alignas(64) Float singleScaleBuffer[simdWidth], doubleScaleBuffer[simdWidth], codonScaleBuffer[simdWidth];
+    simd_unchecked_store(scaleOneNucleotide, singleScaleBuffer, Kokkos::Experimental::simd_flag_default);
+    simd_unchecked_store(scaleTwoNucleotide, doubleScaleBuffer, Kokkos::Experimental::simd_flag_default);
+    simd_unchecked_store(scaleCodon, codonScaleBuffer, Kokkos::Experimental::simd_flag_default);
+    for (int laneIndex = 0; laneIndex < activeCount; laneIndex++) {
+        if (!laneHit[laneIndex]) continue; // miss lane: EVs unread downstream
+        const ExpScore absorbedSingleScale = pairScoreFromFloat(singleScaleBuffer[laneIndex]);
+        const ExpScore absorbedDoubleScale = pairScoreFromFloat(doubleScaleBuffer[laneIndex]);
+        const ExpScore absorbedCodonScale = pairScoreFromFloat(codonScaleBuffer[laneIndex]);
+        const ExpScore bareSingleScale = scaleScore(absorbedSingleScale, 4.0); // drop the 0.25
+        const ExpScore bareDoubleScale = scaleScore(absorbedDoubleScale, 16.0); // drop 0.25*0.25
+        const int sequenceLength = sequenceLengths[laneIndex];
+        auto backgroundCodonProbability = [&](int position) {
+            return backgroundCodonProbabilityAt(transposedSequenceBases, backgroundPerBase, position, laneIndex);
+        };
+        // Start odds for each lane.
+        std::vector<ExpScore> entryPrefixMass((size_t)dpWidth, zeroScore);
+        for (int sequencePosition = 0; sequencePosition < dpWidth; sequencePosition++) entryPrefixMass[sequencePosition] = pairScoreFromFloat([&] {
+            alignas(64) Float prefixBuffer[simdWidth];
+            simd_unchecked_store(nullPrefixSeed[sequencePosition], prefixBuffer, Kokkos::Experimental::simd_flag_default);
+            return prefixBuffer[laneIndex];
+        }());
+        // Pieces ending here. The first piece uses 1/3 (S4).
+        std::vector<ExpScore> entryTileSingleMass((size_t)dpWidth, zeroScore), entryTileDoubleMass((size_t)dpWidth, zeroScore), entryTileCodonMass((size_t)dpWidth, zeroScore);
+        if (dpWidth > 0) entryTileSingleMass[0] = entryPrefixMass[0];
+        if (dpWidth > 1) entryTileDoubleMass[1] = scaleScore(absorbedDoubleScale, frameChoiceProbability);
+        if (dpWidth > 2) entryTileCodonMass[2] = mulScores(scaleScore(absorbedCodonScale, frameChoiceProbability), backgroundCodonProbability(0));
+        for (int sequencePosition = 1; sequencePosition < dpWidth; sequencePosition++) entryTileSingleMass[sequencePosition] = mulScores(scaleScore(entryPrefixMass[sequencePosition - 1], singleShiftRate), absorbedSingleScale);
+        for (int sequencePosition = 2; sequencePosition < dpWidth; sequencePosition++) entryTileDoubleMass[sequencePosition] = mulScores(scaleScore(entryPrefixMass[sequencePosition - 2], doubleShiftRate), absorbedDoubleScale);
+        for (int sequencePosition = 3; sequencePosition < dpWidth; sequencePosition++)
+            entryTileCodonMass[sequencePosition] = mulScores(scaleScore(mulScores(entryPrefixMass[sequencePosition - 3], absorbedCodonScale), codonKeepProbability), backgroundCodonProbability(sequencePosition - 2));
+        // Middle cover plus fresh cut mass, run backward.
+        std::vector<ExpScore> middleEntryMass((size_t)dpWidth + 3, zeroScore);
         {
-            alignas(64) Float sb[simdWidth], bb[simdWidth], nb[simdWidth];
-            simd_unchecked_store(side[j], sb, Kokkos::Experimental::simd_flag_default);
-            simd_unchecked_store(bgCodonEmitProbs, bb, Kokkos::Experimental::simd_flag_default);
-            simd_unchecked_store(nullModel[j], nb, Kokkos::Experimental::simd_flag_default);
-            // Promote side[j] to the pair domain, folding the row scale
-            // recorded in cumArr (2^(64*cum)) into the exponent.
-            alignas(64) float sm[simdWidth];
-            alignas(64) int se[simdWidth];
-            static const int zeroCum[simdWidth] = {};
-            batchPromoteRescaled(sb, cumArr ? cumArr : zeroCum, sm, se, activeCount);
-            for (int k = 0; k < activeCount; k++) {
-                S[k] = ExpScore{sm[k], se[k]};
-                f0[k] = c0base * (double)bb[k] * nullEmit3Dbl[k];
-                nmD[k] = (double)nb[k];
+            const int lastPosition = std::min(dpWidth, sequenceLength);
+            for (int sequencePosition = lastPosition - 1; sequencePosition >= 0; sequencePosition--) {
+                ExpScore continuation = mulScores(scaleScore(middleEntryMass[sequencePosition + 1], singleShiftRate), absorbedSingleScale);
+                continuation = addScores(continuation, mulScores(scaleScore(middleEntryMass[sequencePosition + 2], doubleShiftRate), absorbedDoubleScale));
+                continuation = addScores(continuation, mulScores(scaleScore(mulScores(middleEntryMass[sequencePosition + 3], absorbedCodonScale), codonKeepProbability),
+                                                backgroundCodonProbability(sequencePosition + 1)));
+                middleEntryMass[sequencePosition] = addScores(promoteColumnMassToPair(backwardColumnAccumulator[sequencePosition], laneIndex, backwardRescaleCounts), continuation);
             }
         }
-        ExpScore m0[simdWidth], m1[simdWidth], m2[simdWidth];
-        batchScaleScores(S, f0, m0, activeCount);
-        batchScaleScores(S, f1A, m1, activeCount);
-        batchScaleScores(S, f2A, m2, activeCount);
-        // In-place adds read-then-write the same lane: safe lane-by-lane.
-        batchAddScores(ev[j + 3 * step].data(), m0, ev[j + 3 * step].data(), activeCount);
-        batchAddScores(ev[j + 1 * step].data(), m1, ev[j + 1 * step].data(), activeCount);
-        batchAddScores(ev[j + 2 * step].data(), m2, ev[j + 2 * step].data(), activeCount);
-        batchScaleScores(ev[j].data(), nmD, ev[j].data(), activeCount);
-        side[j] = VecTraits<simd_t>::vecMax(side[j], vzero);
-    }
-    // Prefix/suffix sum: ev[j] += ev[j+step], iterating so the source side
-    // is already final (opposite direction from the accumulation loop).
-    // Batched per row (in-place lane-by-lane: safe). Exact.
-    for (int j = step < 0 ? 1 : width - 2;
-         (step < 0) ? (j < width) : (j >= 0);
-         j -= step) {
-        batchAddScores(ev[j + step].data(), ev[j].data(), ev[j].data(), activeCount);
+        // Cover of [j, end). Empty rest at end counts as 1.
+        std::vector<ExpScore> suffixRestMass((size_t)dpWidth + 4, zeroScore);
+        if (sequenceLength >= 0) suffixRestMass[sequenceLength] = pow2Score(0);
+        for (int sequencePosition = sequenceLength - 1; sequencePosition >= 0; sequencePosition--) {
+            ExpScore singleTile = mulScores(scaleScore(suffixRestMass[sequencePosition + 1], singleShiftRate), absorbedSingleScale);
+            ExpScore doubleTile = (sequencePosition + 1 <= sequenceLength - 1) ? mulScores(scaleScore(suffixRestMass[sequencePosition + 2], doubleShiftRate), absorbedDoubleScale)
+                                              : scaleScore(bareSingleScale, doubleShiftRate * 0.25);
+            ExpScore codonTile;
+            if (sequencePosition + 2 <= sequenceLength - 1) {
+                codonTile = mulScores(scaleScore(mulScores(suffixRestMass[sequencePosition + 3], absorbedCodonScale), codonKeepProbability), backgroundCodonProbability(sequencePosition));
+            } else if (sequencePosition + 1 <= sequenceLength - 1) {
+                codonTile = scaleScore(bareDoubleScale, codonKeepProbability * 0.0625);
+            } else {
+                codonTile = scaleScore(bareSingleScale, codonKeepProbability * 0.25);
+            }
+            suffixRestMass[sequencePosition] = addScores(singleTile, addScores(doubleTile, codonTile));
+        }
+        // Cover ending here, grown forward from cut mass.
+        std::vector<ExpScore> forwardArrivalMass((size_t)dpWidth, zeroScore);
+        for (int sequencePosition = 0; sequencePosition < dpWidth; sequencePosition++) {
+            ExpScore arrival = promoteColumnMassToPair(forwardColumnAccumulator[sequencePosition], laneIndex, forwardRescaleCounts);
+            if (sequencePosition - 1 >= 0) arrival = addScores(arrival, mulScores(scaleScore(forwardArrivalMass[sequencePosition - 1], singleShiftRate), absorbedSingleScale));
+            if (sequencePosition - 2 >= 0) arrival = addScores(arrival, mulScores(scaleScore(forwardArrivalMass[sequencePosition - 2], doubleShiftRate), absorbedDoubleScale));
+            if (sequencePosition - 3 >= 0)
+                arrival = addScores(arrival, mulScores(scaleScore(mulScores(forwardArrivalMass[sequencePosition - 3], absorbedCodonScale), codonKeepProbability), backgroundCodonProbability(sequencePosition - 2)));
+            forwardArrivalMass[sequencePosition] = arrival;
+        }
+        // Per-base amounts: start pieces plus end pieces.
+        // End pieces are cover before the tile, times the tile,
+        // times cover after. Leftover end pieces at the last base
+        // have empty rest.
+        {
+            std::vector<ExpScore> unifiedColumnMass((size_t)dpWidth, zeroScore);
+            for (int sequencePosition = 0; sequencePosition < dpWidth; sequencePosition++) {
+                ExpScore weightedEntryMass = addScores(entryTileSingleMass[sequencePosition], addScores(scaleScore(entryTileDoubleMass[sequencePosition], 2.0), scaleScore(entryTileCodonMass[sequencePosition], 3.0)));
+                ExpScore columnTotal = mulScores(middleEntryMass[sequencePosition], weightedEntryMass);
+                if (sequencePosition >= 1 && sequencePosition < sequenceLength) {
+                    ExpScore exitSingleTile = mulScores(scaleScore(suffixRestMass[sequencePosition + 1], singleShiftRate), absorbedSingleScale);
+                    columnTotal = addScores(columnTotal, mulScores(forwardArrivalMass[sequencePosition - 1], exitSingleTile));
+                }
+                if (sequencePosition >= 2 && sequencePosition < sequenceLength) {
+                    ExpScore exitDoubleTile = mulScores(scaleScore(suffixRestMass[sequencePosition + 1], doubleShiftRate), absorbedDoubleScale);
+                    columnTotal = addScores(columnTotal, scaleScore(mulScores(forwardArrivalMass[sequencePosition - 2], exitDoubleTile), 2.0));
+                }
+                if (sequencePosition >= 3 && sequencePosition < sequenceLength) {
+                    ExpScore exitCodonTile = mulScores(scaleScore(mulScores(suffixRestMass[sequencePosition + 1], absorbedCodonScale), codonKeepProbability), backgroundCodonProbability(sequencePosition - 2));
+                    columnTotal = addScores(columnTotal, scaleScore(mulScores(forwardArrivalMass[sequencePosition - 3], exitCodonTile), 3.0));
+                }
+                if (sequencePosition == sequenceLength - 1) {
+                    // Leftover endings at the last base.
+                    ExpScore truncatedDoubleTile = scaleScore(bareSingleScale, doubleShiftRate * 0.25);
+                    columnTotal = addScores(columnTotal, scaleScore(mulScores(forwardArrivalMass[sequencePosition - 1], truncatedDoubleTile), 2.0));
+                    ExpScore truncatedCodonSingleBase = scaleScore(bareSingleScale, codonKeepProbability * 0.25);
+                    columnTotal = addScores(columnTotal, scaleScore(mulScores(forwardArrivalMass[sequencePosition - 1], truncatedCodonSingleBase), 3.0));
+                    if (sequencePosition - 2 >= 0) {
+                        ExpScore truncatedCodonDoubleBase = scaleScore(bareDoubleScale, codonKeepProbability * 0.0625);
+                        columnTotal = addScores(columnTotal, scaleScore(mulScores(forwardArrivalMass[sequencePosition - 2], truncatedCodonDoubleBase), 3.0));
+                    }
+                }
+                unifiedColumnMass[sequencePosition] = scaleScore(columnTotal, oneThirdWeight);
+            }
+            ExpScore cumulativeSum = zeroScore;
+            for (int sequencePosition = 0; sequencePosition < dpWidth; sequencePosition++) {
+                cumulativeSum = addScores(cumulativeSum, unifiedColumnMass[sequencePosition]);
+                entryFlankSums[sequencePosition][laneIndex] = cumulativeSum;
+            }
+            cumulativeSum = zeroScore;
+            for (int sequencePosition = dpWidth - 1; sequencePosition >= 0; sequencePosition--) {
+                cumulativeSum = addScores(cumulativeSum, unifiedColumnMass[sequencePosition]);
+                exitFlankSums[sequencePosition][laneIndex] = cumulativeSum;
+            }
+        }
     }
 }
+
 #endif
 
-// Row-scale side product: max pair exponent over an EV side buffer.
-// Scanned once per fixup (O(width)); feeds the Float-compute rebuild scales.
+// Largest score in a flank total. Used once to pick a safe scale.
 template <int EPad>
 void sideEVMax(const ExpVector<EPad> &ev, int width, int activeCount, int *outMax) {
     for (int k = 0; k < activeCount; k++) outMax[k] = INT_MIN;
@@ -194,12 +281,9 @@ void sideEVMax(const ExpVector<EPad> &ev, int width, int activeCount, int *outMa
     }
 }
 
-// Handoff from the backward half to the forward half (split halves): small
-// simd_t values. Bulk buffers (W1, reverseSide, null models,
-// bg_codon, transposed) stay in scratch.
-
+// Background scales handed to the forward half. Bulk arrays stay in scratch.
 struct BackwardCtx {
-    simd_t nullEmit1, nullEmit2, nullEmit3;
+    simd_t nullScaleOneNucleotide, nullScaleTwoNucleotide, nullScaleCodon;
 };
 
 Float log2_sum_exp(Float a, Float b) {

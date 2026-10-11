@@ -15,6 +15,59 @@
 #include <cstddef>
 #include <vector>
 
+// Poison-fill trait: value used for uninitialized scratch under DUMMEST_POISON.
+// Seeds (explicit zero fills) keep using T{}; only "must-overwrite" paths use
+// poisonValue(). Without DUMMEST_POISON this is T{} (no-op).
+template <typename T> struct PoisonFill { static T value() { return T{}; } };
+
+template <> struct PoisonFill<float> {
+    static float value() { return dummestPoisonFloat<float>(); }
+};
+template <> struct PoisonFill<int> {
+    static int value() {
+#ifdef DUMMEST_POISON
+        return dummestPoisonInt();
+#else
+        return 0;
+#endif
+    }
+};
+template <> struct PoisonFill<ExpScore> {
+    static ExpScore value() {
+#ifdef DUMMEST_POISON
+        return poisonScore();
+#else
+        return ExpScore{0.0f, 0};
+#endif
+    }
+};
+// simd_t poison is defined here (simd_t is complete at this point: padded.hh
+// is included AFTER Float/simd_t/simdWidth are defined).
+template <> struct PoisonFill<simd_t> {
+    static simd_t value() { return VecTraits<simd_t>::poison(); }
+};
+template <size_t N> struct PoisonFill<std::array<ExpScore, N>> {
+    static std::array<ExpScore, N> value() {
+        std::array<ExpScore, N> a{};
+        for (auto &s : a) s = PoisonFill<ExpScore>::value();
+        return a;
+    }
+};
+template <size_t N> struct PoisonFill<std::array<int, N>> {
+    static std::array<int, N> value() {
+        std::array<int, N> a{};
+        a.fill(PoisonFill<int>::value());
+        return a;
+    }
+};
+template <size_t N> struct PoisonFill<std::array<float, N>> {
+    static std::array<float, N> value() {
+        std::array<float, N> a{};
+        a.fill(PoisonFill<float>::value());
+        return a;
+    }
+};
+
 template <typename T, int PrePad = 0, int PostPad = 0>
 class PaddedVec {
     std::vector<T> data_;
@@ -49,9 +102,21 @@ public:
 
     void set_logical_size(int n) {
         logical_size_ = n;
+#ifdef DUMMEST_POISON
+        // Uninitialized path (Matrix::resizeNoFill): poison the whole logical
+        // range so a missing DP write aborts on first read instead of hiding
+        // as stale-previous-batch data. vector::resize would preserve old
+        // elements, so explicitly fill after growing.
+        data_.resize(n + PrePad + PostPad);
+        T pv = PoisonFill<T>::value();
+        std::fill_n(data_.data() + PrePad, n, pv);
+        std::fill_n(data_.data(), PrePad, pv);
+        std::fill_n(data_.data() + PrePad + n, PostPad, pv);
+#else
         data_.resize(n + PrePad + PostPad, T{});
         std::fill_n(data_.data(), PrePad, T{});
         std::fill_n(data_.data() + PrePad + n, PostPad, T{});
+#endif
     }
 };
 
@@ -83,6 +148,8 @@ public:
     // Resize without filling the logical range (pads still zeroed). Caller
     // must overwrite every logical cell before reading; use fillRow / manual
     // stores for seed/border cells that are read but never written.
+    // Under DUMMEST_POISON the logical range is NaN-filled (see
+    // PaddedVec::set_logical_size) so a missing write aborts on first read.
     void resizeNoFill(size_t nrows, int ncols) {
         logical_cols_ = ncols;
         rows_.resize(nrows);
@@ -103,9 +170,7 @@ public:
     size_t rows() const { return rows_.size(); }
 };
 
-// Scalar per-lane ExpScore vector for EV side buffers (left_side_EV,
-// right_side_EV). PrePad supports negative indexing (right_side_EV writes
-// j-3); operator[] exposes the per-lane array used by the fixup loops.
+// Per-lane flank totals. PrePad allows negative indexing.
 template <int PrePad = 0>
 class ExpVector {
     std::vector<std::array<ExpScore, simdWidth>> data_;
@@ -113,6 +178,7 @@ public:
     ExpVector() = default;
 
     void assign(int n) {
+        // Stays zeroed: zero is the correct start for these totals.
         data_.assign((size_t)n + PrePad, std::array<ExpScore, simdWidth>{});
     }
 
@@ -120,13 +186,8 @@ public:
     const std::array<ExpScore, simdWidth> &operator[](int j) const { return data_[(size_t)PrePad + j]; }
 };
 
-// Scalar per-lane ExpScore matrix for combined scores (X, prefixOptimal,
-// suffixOptimal). SoA layout: separate mantissa/exponent planes, one
-// float[simdWidth] + one int32[simdWidth] per cell, so lane-vectorized
-// kernels can stream each plane unit-stride. get_lane is by value; PrePad
-// supports negative-column reads (j-3). Subnormal mantissas are not
-// preserved: any lane that would need one maps to the zero sentinel
-// (matches FTZ/DAZ hardware semantics).
+// Match and best tables, one score per lane.
+// Reads before position 0 see zero. Tiny values read as zero.
 template <int PrePad = 0>
 class ExpMatrix {
     std::vector<std::array<float, simdWidth>> m_;
@@ -137,16 +198,18 @@ public:
 
     void assign(size_t nrows, int ncols) {
         logical_cols_ = ncols;
+        // Stays zeroed: edge cells are valid zero starts.
         m_.assign(nrows * (ncols + PrePad), std::array<float, simdWidth>{});
         e_.assign(nrows * (ncols + PrePad), std::array<int32_t, simdWidth>{});
     }
 
     ExpScore get_lane(size_t i, int j, int k) const {
         const size_t o = i * ((size_t)logical_cols_ + PrePad) + (j + PrePad);
-        return ExpScore{m_[o][k], e_[o][k]};
+        ExpScore s{m_[o][k], e_[o][k]};
+        DUMMEST_POISON_ASSERT(!isPoisonScore(s));
+        return s;
     }
-    // SoA-native lane access for vectorized kernels: 8 contiguous mantissas
-    // / exponents of cell (i,j), lane k = ptr[k].
+    // Fast access to one cell's lanes.
     float *m_ptr(size_t i, int j) { return m_[i * ((size_t)logical_cols_ + PrePad) + (j + PrePad)].data(); }
     const float *m_ptr(size_t i, int j) const { return m_[i * ((size_t)logical_cols_ + PrePad) + (j + PrePad)].data(); }
     int32_t *e_ptr(size_t i, int j) { return e_[i * ((size_t)logical_cols_ + PrePad) + (j + PrePad)].data(); }
@@ -158,9 +221,7 @@ public:
     }
 };
 
-// Side accumulator at row scale: plain mantissas, no per-lane
-// exponent. Overflow is handled by whole-row 2^-64 rescaling
-// (inherited row scale), not by side adjustment.
+// Running cut totals. Halved whole-row at a time when too large.
 template <typename Vec, int PrePad = 0, int PostPad = 0>
 struct PaddedSide {
     PaddedVec<Vec, PrePad, PostPad> m;

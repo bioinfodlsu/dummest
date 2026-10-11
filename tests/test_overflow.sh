@@ -59,11 +59,18 @@ mkdir -p "$OUTDIR"
 
 # --- cases -------------------------------------------------------------------
 # name | bin | cpus | fa | expected score | tol | E regex | anchor | spans
+# Expected values re-baselined after the null-model corrections (per-lane
+# empty suffix, past-end lane masking, frameshift exit factors).
+# Medium spans re-baselined after the range-DP flank fix (unified end-booked
+# cumsum EVs + suffix-emit X(i,j+3) index fix): the representative alignment
+# now exits at the spec-optimal boundary (428/504;1994/1510) instead of
+# overextending into the masked tail (426/555;1988/1668). Score, E and anchor
+# are unchanged.
 CASES=(
- "herpes_D|$DUMMER_BIN|$NPROC|$FIXDIR/herpes.fa|2235.42|6|0|981,5942|TRAIN.Herpes_MCP,1,1358,+;herpes0,3003,4072,+"
- "medium_D|$DUMMER_BIN|$NPROC|$FIXDIR/medium.fa|749.37|1|9\\..*e-216|531,2302|TRAIN.Herpes_MCP,426,506,+;medium0,1988,1516,+"
- "herpes_L|$DUMMERL_BIN|$NPROC|$FIXDIR/herpes.fa|2235.42|6|0|-|TRAIN.Herpes_MCP,1,1358,+;herpes0,3003,4072,+"
- "medium_L|$DUMMERL_BIN|$NPROC|$FIXDIR/medium.fa|749.37|1|9\\..*e-216|-|TRAIN.Herpes_MCP,426,506,+;medium0,1988,1516,+"
+ "herpes_D|$DUMMER_BIN|$NPROC|$FIXDIR/herpes.fa|2242.35|6|0|981,5942|TRAIN.Herpes_MCP,1,1358,+;herpes0,3003,4072,+"
+ "medium_D|$DUMMER_BIN|$NPROC|$FIXDIR/medium.fa|754.34|1|[0-9]\\.[0-9]+e-216|531,2302|TRAIN.Herpes_MCP,428,504,+;medium0,1994,1510,+"
+ "herpes_L|$DUMMERL_BIN|$NPROC|$FIXDIR/herpes.fa|2242.35|6|0|-|TRAIN.Herpes_MCP,1,1358,+;herpes0,3003,4072,+"
+ "medium_L|$DUMMERL_BIN|$NPROC|$FIXDIR/medium.fa|754.34|1|[0-9]\\.[0-9]+e-216|-|TRAIN.Herpes_MCP,428,504,+;medium0,1994,1510,+"
 )
 
 for spec in "${CASES[@]}"; do

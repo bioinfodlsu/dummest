@@ -3,15 +3,191 @@
 
 #include "dummest-dp.hh"
 
+inline void buildNullSuffix(const Float *backgroundPerBase, const uint8_t *transposedSequenceBases,
+        const Float *sequenceLengths, int activeCount, int dpWidth, ExpVector<0> &suffixProbabilities,
+        double codonKeepProbability, double singleNucleotideEmission, double doubleNucleotideEmission) {
+    float trailingMantissa;
+    int trailingExponent;
+    splitNormalizedDouble(0.5 * codonKeepProbability, trailingMantissa, trailingExponent);
+    double singleRow[simdWidth], doubleRow[simdWidth];
+    for (int k = 0; k < (int)simdWidth; k++) { singleRow[k] = singleNucleotideEmission; doubleRow[k] = doubleNucleotideEmission; }
+    // Empty rest counts as 1, set before use below.
+    for (int k = 0; k < activeCount; k++)
+        suffixProbabilities[(int)sequenceLengths[k]][k] = pow2Score(0);
+    for (int i = dpWidth - 1; i >= 0; i--) {
+        const char* indices = (const char*)&transposedSequenceBases[i * simdWidth];
+        SimdFloat backgroundRaw = simdLookup(backgroundPerBase, indices);
+        alignas(64) Float backgroundCodon[simdWidth];
+        simd_unchecked_store(simd_t(backgroundRaw), backgroundCodon, Kokkos::Experimental::simd_flag_default);
+        const ExpScore *suffixPlusThree = suffixProbabilities[i + 3].data();
+        const ExpScore *suffixPlusOne = suffixProbabilities[i + 1].data();
+        const ExpScore *suffixPlusTwo = suffixProbabilities[i + 2].data();
+        double codonScale[simdWidth];
+        ExpScore singleInput[simdWidth], doubleInput[simdWidth];
+        for (int k = 0; k < activeCount; k++) {
+            int length = (int)sequenceLengths[k];
+            codonScale[k] = (double)backgroundCodon[k] * codonKeepProbability;
+            singleInput[k] = (i < length) ? suffixPlusOne[k] : ExpScore{0.0f, 0};
+            // Past the end the 2-base piece has no rest:
+            // count it as one 0.25 piece.
+            doubleInput[k] = (i + 1 < length) ? suffixPlusTwo[k]
+                  : ((i + 1 == length) ? pow2Score(2) : ExpScore{0.0f, 0});
+        }
+        ExpScore codonRaw[simdWidth], codonBranch[simdWidth], singleBranch[simdWidth], doubleBranch[simdWidth], shiftBranchSum[simdWidth];
+        batchScaleScores(suffixPlusThree, codonScale, codonRaw, activeCount);
+        batchScaleScores(singleInput, singleRow, singleBranch, activeCount);
+        batchScaleScores(doubleInput, doubleRow, doubleBranch, activeCount);
+        for (int k = 0; k < activeCount; k++) {
+            int length = (int)sequenceLengths[k];
+            // Leftover end codon: one 0.25 per missing base.
+            codonBranch[k] = (i + 2 < length) ? codonRaw[k]
+                                  : ExpScore{trailingMantissa, trailingExponent - 2 * (length - i) + 1};
+        }
+        auto &suffixOutput = suffixProbabilities[i];
+        batchAddScores(singleBranch, doubleBranch, shiftBranchSum, activeCount);
+        batchAddScores(codonBranch, shiftBranchSum, suffixOutput.data(), activeCount);
+        // Past the end only the boundary cell keeps its 1.
+        for (int k = 0; k < activeCount; k++) {
+            int length = (int)sequenceLengths[k];
+            if (i >= length) suffixOutput[k] = (i == length) ? pow2Score(0) : ExpScore{0.0f, 0};
+        }
+    }
+}
 
-// Backward half of the unified DP: setup + null models + backward pass over
-// W1 (+ reverseSide accumulate) + optional per-lane best
-// (filter / calibration score). The forward half (forwardPass) consumes W1
-// read-only.
-// Batch setup shared by backwardPass: transposed decode, null pair models,
-// null_emit triple, buffer sizing, nullModel pair formation, bg precompute.
-// Fills ctx.nullEmit1/2/3. W1 bordered-zeroed; reverseSide assigned when
-// needAlign. Bulk DP buffers live in scratch.
+// Background odds of each prefix. First piece uses 1/3 (S4).
+inline void buildNullPrefixFirstCodon(const Float *backgroundPerBase, const uint8_t *transposedSequenceBases,
+        const Float *sequenceLengths, int activeCount, int dpWidth, ExpVector<0> &prefixProbabilities,
+        double codonKeepProbability, double singleNucleotideEmission, double doubleNucleotideEmission, double frameChoiceProbability) {
+    const ExpScore zeroScore{0.0f, 0};
+    ExpScore zeroRow[simdWidth];
+    for (int k = 0; k < (int)simdWidth; k++) zeroRow[k] = zeroScore;
+    double singleRow[simdWidth], doubleRow[simdWidth];
+    for (int k = 0; k < (int)simdWidth; k++) { singleRow[k] = singleNucleotideEmission; doubleRow[k] = doubleNucleotideEmission; }
+    for (int i = 0; i < dpWidth; i++) {
+        const char* indices = (const char*)&transposedSequenceBases[(i - 2) * simdWidth];
+        SimdFloat backgroundRaw = simdLookup(backgroundPerBase, indices);
+        alignas(64) Float backgroundCodon[simdWidth];
+        simd_unchecked_store(simd_t(backgroundRaw), backgroundCodon, Kokkos::Experimental::simd_flag_default);
+        double codonScale[simdWidth];
+        for (int k = 0; k < activeCount; k++) codonScale[k] = (double)backgroundCodon[k] * codonKeepProbability;
+        const ExpScore *prefixSingle = (i > 0) ? prefixProbabilities[i - 1].data() : zeroRow;
+        const ExpScore *prefixDouble = (i >= 2) ? prefixProbabilities[i - 2].data() : zeroRow;
+        ExpScore codonBranch[simdWidth], singleBranch[simdWidth], doubleBranch[simdWidth], shiftBranchSum[simdWidth], prefixOutput[simdWidth];
+        if (i >= 3) {
+            batchScaleScores(prefixProbabilities[i - 3].data(), codonScale, codonBranch, activeCount);
+        } else if (i == 2) {
+            for (int k = 0; k < activeCount; k++)
+                codonBranch[k] = scaleScore(normalizeScore((double)backgroundCodon[k], 0), frameChoiceProbability);
+        } else if (i == 1) {
+            // 1/3 times 0.25*0.25.
+            for (int k = 0; k < activeCount; k++)
+                codonBranch[k] = scaleScore(pow2Score(-4), frameChoiceProbability);
+        } else {
+            // 1/3 times 0.25.
+            for (int k = 0; k < activeCount; k++)
+                codonBranch[k] = scaleScore(pow2Score(-2), frameChoiceProbability);
+        }
+        batchScaleScores(prefixSingle, singleRow, singleBranch, activeCount);
+        batchScaleScores(prefixDouble, doubleRow, doubleBranch, activeCount);
+        batchAddScores(singleBranch, doubleBranch, shiftBranchSum, activeCount);
+        batchAddScores(codonBranch, shiftBranchSum, prefixOutput, activeCount);
+        auto &prefixCell = prefixProbabilities[i];
+        for (int k = 0; k < activeCount; k++) {
+            int length = (int)sequenceLengths[k];
+            prefixCell[k] = (i < length) ? prefixOutput[k] : ExpScore{0.0f, 0};
+        }
+    }
+}
+
+// Whole-sequence background odds plus per-base scales for the DP.
+inline void buildNullTotalAndScales(const Float *sequenceLengths, int activeCount,
+        ExpVector<0> &prefixProbabilities, double singleShiftRate, double doubleShiftRate,
+        ExpScore *scalePerBase, ExpScore *scalePerBaseInverse,
+        ExpScore *scaleOneNucleotide, ExpScore *scaleTwoNucleotide, ExpScore *scaleCodon) {
+    alignas(64) Float nullSequenceLog[simdWidth] = {0};
+    const double keepSingle = 1.0 - (double)singleShiftRate;
+    const double keepBoth = keepSingle - (double)doubleShiftRate;
+    for (int idx = 0; idx < activeCount; idx++) {
+        int length = (int)sequenceLengths[idx];
+        assert(length >= 3);
+        ExpScore trailingSingle = scaleScore(prefixProbabilities[length - 2][idx], keepSingle * 0.25);
+        ExpScore trailingDouble = scaleScore(prefixProbabilities[length - 3][idx], keepBoth * 0.0625);
+        ExpScore total = addScores(addScores(prefixProbabilities[length - 1][idx], trailingSingle), trailingDouble);
+        nullSequenceLog[idx] = (Float)scoreToLog2(total);
+        double perBaseLogProb = -(double)nullSequenceLog[idx] / (double)sequenceLengths[idx];
+        if (!(perBaseLogProb < (double)EXP2_HI)) perBaseLogProb = (double)EXP2_HI;
+        double perBaseRaw = exp2(perBaseLogProb);
+        ExpScore perBaseValue = normalizeScore(perBaseRaw, 0);
+        scalePerBase[idx] = perBaseValue;
+        scalePerBaseInverse[idx] = normalizeScore(1.0 / perBaseRaw, 0);
+        ExpScore quarter = normalizeScore(0.25, 0);
+        ExpScore sixteenth = normalizeScore(0.0625, 0);
+        scaleOneNucleotide[idx] = perBaseValue * quarter;
+        scaleTwoNucleotide[idx] = perBaseValue * perBaseValue * sixteenth;
+        scaleCodon[idx] = perBaseValue * perBaseValue * perBaseValue;
+    }
+}
+
+// Background odds with scaling folded in, one per base.
+// The suffix seed at j starts after j. Short lanes freeze early.
+inline void buildNullSeedModels(int dpWidth, int activeCount, const Float *sequenceLengths,
+        ExpVector<0> &prefixProbabilities, ExpVector<0> &suffixProbabilities,
+        ExpScore *scalePerBase, ExpScore *scalePerBaseInverse,
+        PaddedVec<simd_t, 0, 0> &prefixSeed, PaddedVec<simd_t, 0, 0> &suffixSeedFromNext) {
+    ExpScore runningScale[simdWidth]{};
+    for (int k = 0; k < activeCount; k++) runningScale[k] = pow2Score(0);
+    int maxLength = 0;
+    for (int k = 0; k < activeCount; k++)
+        maxLength = std::max(maxLength, (int)sequenceLengths[k]);
+    ExpScore savedScale[simdWidth];
+    for (int t = 0; t < maxLength - 1; t++) {
+        for (int k = 0; k < activeCount; k++) savedScale[k] = runningScale[k];
+        batchMulScores(runningScale, scalePerBase, runningScale, activeCount, 0);
+        for (int k = 0; k < activeCount; k++)
+            if (t >= (int)sequenceLengths[k] - 1) runningScale[k] = savedScale[k];
+    }
+    for (int j = 0; j < dpWidth; j++) {
+        ExpScore column[simdWidth]{};
+        batchMulScores(suffixProbabilities[j + 1].data(), runningScale, column, activeCount, 0);
+        suffixSeedFromNext[j] = VecTraits<simd_t>::packScores(column, activeCount);
+        batchMulScores(runningScale, scalePerBaseInverse, runningScale, activeCount, 0);
+    }
+    for (int k = 0; k < activeCount; k++)
+        runningScale[k] = scalePerBase[k];
+    for (int k = activeCount; k < (int)simdWidth; k++)
+        runningScale[k] = ExpScore{0.0f, 0};
+    for (int j = 0; j < dpWidth; j++) {
+        ExpScore column[simdWidth]{};
+        batchMulScores(prefixProbabilities[j].data(), runningScale, column, activeCount, 0);
+        prefixSeed[j] = VecTraits<simd_t>::packScores(column, activeCount);
+        batchMulScores(runningScale, scalePerBase, runningScale, activeCount, 0);
+    }
+}
+
+// Shared background setup. Both the full and filter-only paths
+// run it so their scores match.
+inline void buildBatchNullModels(const Profile &profile, const uint8_t *transposedSequenceBases,
+        const Float *sequenceLengths, int activeCount, int dpWidth,
+        ExpVector<0> &prefixProbabilities, ExpVector<0> &suffixProbabilities,
+        ExpScore *scalePerBase, ExpScore *scalePerBaseInverse,
+        ExpScore *scaleOneNucleotide, ExpScore *scaleTwoNucleotide, ExpScore *scaleCodon) {
+    const double singleShiftRate = BACKGROUND_FRAMESHIFT_RATE;
+    const double doubleShiftRate = BACKGROUND_FRAMESHIFT_RATE_2;
+    const double codonKeepProbability = 1 - singleShiftRate - doubleShiftRate;
+    const double singleNucleotideEmission = singleShiftRate * 0.25;
+    const double doubleNucleotideEmission = doubleShiftRate * 0.0625;
+    const double frameChoiceProbability = 1.0 / 3.0;
+    const Float *backgroundPerBase = profile.bg_probs.data() + 4;
+    buildNullSuffix(backgroundPerBase, transposedSequenceBases, sequenceLengths, activeCount,
+        dpWidth, suffixProbabilities, codonKeepProbability, singleNucleotideEmission, doubleNucleotideEmission);
+    buildNullPrefixFirstCodon(backgroundPerBase, transposedSequenceBases, sequenceLengths, activeCount,
+        dpWidth, prefixProbabilities, codonKeepProbability, singleNucleotideEmission,
+        doubleNucleotideEmission, frameChoiceProbability);
+    buildNullTotalAndScales(sequenceLengths, activeCount, prefixProbabilities, singleShiftRate,
+        doubleShiftRate, scalePerBase, scalePerBaseInverse, scaleOneNucleotide, scaleTwoNucleotide, scaleCodon);
+}
+
+// Setup for the backward half. Fills the background scales in ctx.
 void setupBatch(const Profile &profile,
              const std::array<std::vector<uint8_t>*, simdWidth> &decoded,
              DPScratch &scratch, int activeCount,
@@ -25,7 +201,7 @@ void setupBatch(const Profile &profile,
 
     scratch.dpWidth = maxSequenceLength;
 
-    // Instrumentation (D): max DP width across all batches (CAS-max).
+    // Track widest batch seen.
     {
         size_t w = (size_t)maxSequenceLength;
         size_t cur = g_maxDpWidth.load(std::memory_order_relaxed);
@@ -33,171 +209,48 @@ void setupBatch(const Profile &profile,
             ;
     }
 
-    int alphabetSize = profile.width - nonLetterWidth;
-    int zero_idx = alphabetSize + 4; // new padded index that maps to 0.0
+    auto &prefixProbabilities = scratch.nullPrefixProbabilities;
+    auto &suffixProbabilities = scratch.nullSuffixProbabilities;
 
-    uint8_t* transposed_base;
-    auto &nullProbsPrefix = scratch.nullProbsPrefix;
-    auto &nullProbsSuffix = scratch.nullProbsSuffix;
+    uint8_t* transposedSequenceBases = buildBatchTransposed(scratch, profile, activeCount, scratch.dpWidth, decoded);
 
-    transposed_base = buildTransposedDecoded(scratch, scratch.dpWidth, activeCount, zero_idx, decoded);
+    alignas(64) Float sequenceLengths[simdWidth] = {};
+    fillSequenceLengths(activeCount, decoded, sequenceLengths);
 
-    alignas(64) Float seqLengthArr[simdWidth] = {};
-    for (int idx = 0; idx < activeCount; idx++) {
-        seqLengthArr[idx] = (Float)decoded[idx]->size();
-    }
-    // Inactive lanes: length 1 keeps per-lane divisions finite.
-    for (int k = activeCount; k < (int)simdWidth; k++) {
-        seqLengthArr[k] = 1;
-    }
+    prefixProbabilities.assign(scratch.dpWidth + 4);
+    suffixProbabilities.assign(scratch.dpWidth + 4);
 
-    nullProbsPrefix.assign(scratch.dpWidth + 4);
-    nullProbsSuffix.assign(scratch.dpWidth + 4);
+    ExpScore scalePerBase[simdWidth]{}, scalePerBaseInverse[simdWidth]{};
+    ExpScore scaleOneNucleotide[simdWidth]{}, scaleTwoNucleotide[simdWidth]{}, scaleCodon[simdWidth]{};
+    buildBatchNullModels(profile, transposedSequenceBases, sequenceLengths, activeCount,
+        scratch.dpWidth, prefixProbabilities, suffixProbabilities,
+        scalePerBase, scalePerBaseInverse, scaleOneNucleotide, scaleTwoNucleotide, scaleCodon);
 
-    // Null model in the pair domain: value = m * 2^e, so the log-sum-exp
-    // recursion becomes ordinary products/sums of non-negative pairs. This
-    // removes every per-column exp2/log2 from the null model.
-    const double c_full = 1 - BACKGROUND_FRAMESHIFT_RATE - BACKGROUND_FRAMESHIFT_RATE_2;
-    const double c_fs1 = BACKGROUND_FRAMESHIFT_RATE * 0.25;
-    const double c_fs2 = BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625;
-    const Float *bg_lin_ptr = profile.bg_probs.data() + 4;
-
-    // suffix[i] = P(sequence[i..end]): backward recursion, seed 1 at i=width.
-    // Batched pair kernels (no frexp/ldexp): per-column factor/row gathers +
-    // batchScaleScores/batchAddScores; the partial-codon branch is an exact power
-    // of two, so its per-lane value is pure integer arithmetic. Exact.
-    float mCfull;
-    int eCfull;
-    splitNormalizedDouble(0.5 * c_full, mCfull, eCfull);
-    double cfs1arr[simdWidth], cfs2arr[simdWidth];
-    for (int k = 0; k < (int)simdWidth; k++) { cfs1arr[k] = c_fs1; cfs2arr[k] = c_fs2; }
-    for (int k = 0; k < activeCount; k++)
-        nullProbsSuffix[scratch.dpWidth][k] = pow2Score(0);
-    for (int i = scratch.dpWidth - 1; i >= 0; i--) {
-        const char* indices = (const char*)&transposed_base[i * simdWidth];
-        SimdFloat bg_raw = simdLookup(bg_lin_ptr, indices);
-        alignas(64) Float bgA[simdWidth];
-        simd_unchecked_store(simd_t(bg_raw), bgA, Kokkos::Experimental::simd_flag_default);
-        const ExpScore *suf3 = nullProbsSuffix[i + 3].data();
-        const ExpScore *suf1 = nullProbsSuffix[i + 1].data();
-        const ExpScore *suf2 = nullProbsSuffix[i + 2].data();
-        double f1[simdWidth];
-        ExpScore m1[simdWidth], m2[simdWidth];
+    // Tail cells are read but never written; zero them, keeping
+    // each lane's end cell at 1.
+    for (int j = scratch.dpWidth; j < scratch.dpWidth + 4; j++) {
         for (int k = 0; k < activeCount; k++) {
-            int len = (int)seqLengthArr[k];
-            f1[k] = (double)bgA[k] * c_full;
-            // Masked inputs: batchScaleScores maps zero to zero, so dead
-            // branches contribute nothing to the final adds.
-            m1[k] = (i < len) ? suf1[k] : ExpScore{0.0f, 0};
-            m2[k] = (i + 1 < len) ? suf2[k] : ExpScore{0.0f, 0};
-        }
-        ExpScore t1a[simdWidth], t1[simdWidth], tfs1[simdWidth], tfs2[simdWidth], tmp[simdWidth];
-        batchScaleScores(suf3, f1, t1a, activeCount);
-        batchScaleScores(m1, cfs1arr, tfs1, activeCount);
-        batchScaleScores(m2, cfs2arr, tfs2, activeCount);
-        for (int k = 0; k < activeCount; k++) {
-            int len = (int)seqLengthArr[k];
-            // scaleScore(pow2Score(-2*(len-i)), c_full): the pow2 part is
-            // {0.5, -2*(len-i)+1}, so this is the precomputed constant with
-            // a per-lane exponent shift. Matches the scalar bit-for-bit.
-            t1[k] = (i + 2 < len) ? t1a[k]
-                                  : ExpScore{mCfull, eCfull - 2 * (len - i) + 1};
-        }
-        auto &dst = nullProbsSuffix[i];
-        batchAddScores(tfs1, tfs2, tmp, activeCount);
-        batchAddScores(t1, tmp, dst.data(), activeCount);
-    }
-    // prefix[i] = P(sequence[0..i]): forward recursion, seed 1 at i=width.
-    // Same batching as suffix. t2/t3 boundary rows (i==0/1) select a
-    // precomputed constant / zero-sentinel row instead of branching; only the
-    // t1 boundary (i<3, 3 columns per batch) keeps the scalar original.
-    const ExpScore one0 = pow2Score(0);
-    ExpScore one0arr[simdWidth], zeroarr[simdWidth];
-    for (int k = 0; k < (int)simdWidth; k++) { one0arr[k] = one0; zeroarr[k] = ExpScore{0.0f, 0}; }
-    for (int k = 0; k < activeCount; k++)
-        nullProbsPrefix[scratch.dpWidth][k] = pow2Score(0);
-    for (int i = 0; i < scratch.dpWidth; i++) {
-        // Vectorized bg emission lookup via transposed_base
-        const char* indices = (const char*)&transposed_base[(i - 2) * simdWidth];
-        SimdFloat bg_raw = simdLookup(bg_lin_ptr, indices);
-        alignas(64) Float bgA[simdWidth];
-        simd_unchecked_store(simd_t(bg_raw), bgA, Kokkos::Experimental::simd_flag_default);
-        double f1[simdWidth];
-        for (int k = 0; k < activeCount; k++) f1[k] = (double)bgA[k] * c_full;
-        const ExpScore *r2 = (i > 0) ? nullProbsPrefix[i - 1].data() : one0arr;
-        const ExpScore *r3 = (i >= 2) ? nullProbsPrefix[i - 2].data()
-                                      : (i == 1 ? one0arr : zeroarr);
-        ExpScore t1[simdWidth], t2[simdWidth], t3[simdWidth], tmp[simdWidth], res[simdWidth];
-        if (i >= 3) {
-            batchScaleScores(nullProbsPrefix[i - 3].data(), f1, t1, activeCount);
-        } else {
-            // Boundary columns (3 per batch): original scalar expressions.
-            for (int k = 0; k < activeCount; k++) {
-                if (i == 2) {
-                    t1[k] = scaleScore(normalizeScore((double)bgA[k], 0), c_full);
-                } else {
-                    t1[k] = scaleScore(pow2Score(-2 * (i + 1)), c_full);
-                }
+            if (j != (int)sequenceLengths[k]) {
+                prefixProbabilities[j][k] = ExpScore{0.0f, 0};
+                suffixProbabilities[j][k] = ExpScore{0.0f, 0};
             }
         }
-        batchScaleScores(r2, cfs1arr, t2, activeCount);
-        batchScaleScores(r3, cfs2arr, t3, activeCount);
-        batchAddScores(t2, t3, tmp, activeCount);
-        batchAddScores(t1, tmp, res, activeCount);
-        auto &dst = nullProbsPrefix[i];
-        for (int k = 0; k < activeCount; k++) {
-            int len = (int)seqLengthArr[k];
-            dst[k] = (i < len) ? res[k] : ExpScore{0.0f, 0};
+        for (int k = activeCount; k < (int)simdWidth; k++) {
+            prefixProbabilities[j][k] = ExpScore{0.0f, 0};
+            suffixProbabilities[j][k] = ExpScore{0.0f, 0};
         }
     }
 
-    alignas(64) Float nullSeqLogProb[simdWidth] = {0};
-    // Per-lane null_emit triple in the pair domain: ne1 = ne*0.25,
-    // ne2 = ne^2*0.0625, ne3 = ne^3.
-    ExpScore nullEmitArr[simdWidth]{}, nullEmitInvArr[simdWidth]{};
-    ExpScore nullEmit1Arr[simdWidth]{}, nullEmit2Arr[simdWidth]{}, nullEmit3Arr[simdWidth]{};
-
-    for (int idx = 0; idx < activeCount; idx++) {
-        int len = (int)seqLengthArr[idx];
-        if (len >= 3) {
-            ExpScore total = addScores(
-                addScores(nullProbsPrefix[len - 1][idx], nullProbsPrefix[len - 2][idx]),
-                nullProbsPrefix[len - 3][idx]);
-            nullSeqLogProb[idx] = (Float)scoreToLog2(total);
-        } else {
-            // For very short sequences, use a neutral finite null model.
-            // (The old -INFINITY fed exp2(+inf)=+inf into every C_*
-            // constant and poisoned the whole lane.)
-            nullSeqLogProb[idx] = 0;
-        }
-
-        // Clamp: the true value is O(1); anything past the overflow boundary
-        // is degenerate input, and must stay finite, never +inf.
-        double e = -(double)nullSeqLogProb[idx] / (double)seqLengthArr[idx];
-        if (!(e < (double)EXP2_HI)) e = (double)EXP2_HI;
-        double ne_d = exp2(e);
-        ExpScore ne = normalizeScore(ne_d, 0);
-        nullEmitArr[idx] = ne;
-        nullEmitInvArr[idx] = normalizeScore(1.0 / ne_d, 0);
-        ExpScore q1 = normalizeScore(0.25, 0);
-        ExpScore q2 = normalizeScore(0.0625, 0);
-        nullEmit1Arr[idx] = ne * q1;
-        nullEmit2Arr[idx] = ne * ne * q2;
-        nullEmit3Arr[idx] = ne * ne * ne;
-    }
-
-    simd_t nullEmit1 = VecTraits<simd_t>::packScores(nullEmit1Arr, activeCount);
-    simd_t nullEmit2 = VecTraits<simd_t>::packScores(nullEmit2Arr, activeCount);
-    simd_t nullEmit3 = VecTraits<simd_t>::packScores(nullEmit3Arr, activeCount);
+    simd_t nullScaleOneNucleotide = VecTraits<simd_t>::packScores(scaleOneNucleotide, activeCount);
+    simd_t nullScaleTwoNucleotide = VecTraits<simd_t>::packScores(scaleTwoNucleotide, activeCount);
+    simd_t nullScaleCodon = VecTraits<simd_t>::packScores(scaleCodon, activeCount);
     simd_t vzero = VecTraits<simd_t>::zero();
 
     scratch.W0_curr.resize(scratch.dpWidth + 4, vzero);
     scratch.W0_next.resize(scratch.dpWidth + 4, vzero);
 
     scratch.W1.resizeNoFill(profile.length + 2, scratch.dpWidth + 4);
-    // Bordered zeros: row plen+1 is never written (loop runs i=plen..0) but is
-    // read as the i+1 seed row; tail columns are read as shift-register seeds
-    // before the owning row writes them. Zero only these (O(W+P)).
+    // Borders are read before written; zero only them.
     scratch.W1.fillRow(profile.length + 1, vzero);
     for (int bi = 0; bi <= profile.length; bi++) {
         simd_t *wrp = scratch.W1.row_ptr(bi);
@@ -205,12 +258,10 @@ void setupBatch(const Profile &profile,
             wrp[bj] = vzero;
     }
 
-    // Cumulative dynamic-rescale counters, zeroed per batch. Inheritance
-    // (backwardRescaleCount[i] starts as backwardRescaleCount[i+1]) happens in backwardPass below.
+    // Halve counts, zeroed per batch. Carried over row to row below.
     scratch.forwardRescaleCount.assign(profile.length + 2, std::array<int, simdWidth>{});
     scratch.backwardRescaleCount.assign(profile.length + 2, std::array<int, simdWidth>{});
-    // Per-row max X exponent, seeded to INT_MIN per batch (tracked during
-    // forwardPass formation; consumed by the Float-compute rebuilds).
+    // Largest match scores per row, for the rebuild scale.
     {
         std::array<int, simdWidth> neg;
         neg.fill(INT_MIN);
@@ -220,75 +271,32 @@ void setupBatch(const Profile &profile,
     const size_t padded_seq_len = scratch.dpWidth + 4;
     auto &Y0_next = scratch.Y0_next; Y0_next.resize(padded_seq_len, vzero);
     auto &Y0_curr = scratch.Y0_curr; Y0_curr.resize(padded_seq_len, vzero);
+#ifdef DUMMEST_POISON
+    // Mark for overwrite; a missing write fails loudly below.
+    std::fill(Y0_curr.begin(), Y0_curr.end(), VecTraits<simd_t>::poison());
+#endif
 
-    auto &nullModelPrefix = scratch.nullModelPrefix; nullModelPrefix.resize(padded_seq_len, vzero);
-    auto &nullModelSuffix = scratch.nullModelSuffix; nullModelSuffix.resize(padded_seq_len, vzero);
+    auto &prefixSeed = scratch.nullPrefixSeed; prefixSeed.resize(padded_seq_len, vzero);
+    auto &suffixSeedFromNext = scratch.nullSuffixSeedFromNext; suffixSeedFromNext.resize(padded_seq_len, vzero);
 
-    // nullModel = P * null_emit^k, formed in the pair domain and materialized
-    // as simd_t lanes. null_emit^k grows
-    // with k while P decays, so the product stays O(1); the pair domain keeps
-    // both factors in range. Only the per-lane exp2 above remains.
-    {
-        // suffix side: exponent = len-1-j (decreasing in j)
-        ExpScore nullEmitPow[simdWidth]{};
-        for (int k = 0; k < activeCount; k++) nullEmitPow[k] = pow2Score(0);
-        // Batched running product (same op order per lane as the scalar
-        // loop, so bit-exact): lanes whose length is exhausted keep their
-        // value via save/restore. No frexp: batchMulScores is libm-free.
-        int maxLen = 0;
-        for (int k = 0; k < activeCount; k++)
-            maxLen = std::max(maxLen, (int)seqLengthArr[k]);
-        ExpScore savePow[simdWidth];
-        for (int t = 0; t < maxLen - 1; t++) {
-            for (int k = 0; k < activeCount; k++) savePow[k] = nullEmitPow[k];
-            batchMulScores(nullEmitPow, nullEmitArr, nullEmitPow, activeCount, 0);
-            for (int k = 0; k < activeCount; k++)
-                if (t >= (int)seqLengthArr[k] - 1) nullEmitPow[k] = savePow[k];
-        }
-        for (int j = 0; j < scratch.dpWidth; j++) {
-            ExpScore col[simdWidth]{};
-            batchMulScores(nullProbsSuffix[j + 1].data(), nullEmitPow, col, activeCount, 0);
-            nullModelSuffix[j] = VecTraits<simd_t>::packScores(col, activeCount);
-            batchMulScores(nullEmitPow, nullEmitInvArr, nullEmitPow, activeCount, 0);
-        }
-        // prefix side: exponent = j+1 (increasing in j); null_emit^1 at j=0.
-        for (int k = 0; k < activeCount; k++)
-            nullEmitPow[k] = nullEmitArr[k]; // null_emit^1
-        for (int k = activeCount; k < (int)simdWidth; k++)
-            nullEmitPow[k] = ExpScore{0.0f, 0};
-        for (int j = 0; j < scratch.dpWidth; j++) {
-            ExpScore col[simdWidth]{};
-            batchMulScores(nullProbsPrefix[j].data(), nullEmitPow, col, activeCount, 0);
-            nullModelPrefix[j] = VecTraits<simd_t>::packScores(col, activeCount);
-            batchMulScores(nullEmitPow, nullEmitArr, nullEmitPow, activeCount, 0);
-        }
-    }
+    buildNullSeedModels(scratch.dpWidth, activeCount, sequenceLengths, prefixProbabilities, suffixProbabilities,
+        scalePerBase, scalePerBaseInverse, prefixSeed, suffixSeedFromNext);
     auto &reverseSide = scratch.reverseSide;
 #ifdef ALIGN
-    // Scores-only callers (calibration) never consume the alignment buffers:
-    // skip allocating the side vectors entirely.
+    // Scores-only path skips these buffers.
     if (needAlign) {
-        // reverseSide accumulates in the backward loop below; forwardSide
-        // belongs to the forward half (forwardPass assigns it).
-        reverseSide.assign(nullModelPrefix.size(), vzero);
+        // backward half fills reverseSide; forward half fills forwardSide.
+        reverseSide.assign(prefixSeed.size(), vzero);
     }
 #endif
-        const Float *bg_probs_ptr = profile.bg_probs.data() + 4;
-        scratch.bgCodonProbs.resize(scratch.dpWidth);
-        simd_t* bg_codon_probs_base = scratch.bgCodonProbs.data();
-        for (int j = -4; j < scratch.dpWidth + 4; j++) {
-            const char* indices = (const char*)&transposed_base[j * simdWidth];
-            bg_codon_probs_base[j] = VecTraits<simd_t>::lookupBg(bg_probs_ptr, indices);
-        }
+        fillBackgroundCodon(scratch, profile, transposedSequenceBases, scratch.dpWidth);
 
-    ctx.nullEmit1 = nullEmit1;
-    ctx.nullEmit2 = nullEmit2;
-    ctx.nullEmit3 = nullEmit3;
+    ctx.nullScaleOneNucleotide = nullScaleOneNucleotide;
+    ctx.nullScaleTwoNucleotide = nullScaleTwoNucleotide;
+    ctx.nullScaleCodon = nullScaleCodon;
 }
 
-// Lean score-only filter: float log2-domain backward, 2-row rolling W1
-// (cache-resident, no matrix store), no alignment, no ExpScore. Survivors
-// are rescored by the slow wave; inf scores always survive (firewall).
+// Fast filter: 2 rolling rows, no alignment. Survivors go to full DP.
 void findSimilaritiesBackwardOnly(
     std::array<Float, simdWidth> &bestScores,
     const Profile &profile,
@@ -302,138 +310,57 @@ void findSimilaritiesBackwardOnly(
     }
     scratch.dpWidth = maxSequenceLength;
 
-    int alphabetSize = profile.width - nonLetterWidth;
-    int zero_idx = alphabetSize + 4;
+    uint8_t* transposedSequenceBases = buildBatchTransposed(scratch, profile, activeCount, scratch.dpWidth, decoded);
 
-    uint8_t* transposed_base = buildTransposedDecoded(scratch, scratch.dpWidth, activeCount, zero_idx, decoded);
+    alignas(64) Float sequenceLengths[simdWidth] = {};
+    fillSequenceLengths(activeCount, decoded, sequenceLengths);
 
-    alignas(64) Float seqLengthArr[simdWidth] = {};
-    for (int idx = 0; idx < activeCount; idx++)
-        seqLengthArr[idx] = (Float)decoded[idx]->size();
-    simd_t seqLengths = Kokkos::Experimental::simd_unchecked_load<simd_t>(seqLengthArr);
+    auto &prefixProbabilities = scratch.nullPrefixProbabilities;
+    auto &suffixProbabilities = scratch.nullSuffixProbabilities;
+    prefixProbabilities.assign(scratch.dpWidth + 4);
+    suffixProbabilities.assign(scratch.dpWidth + 4);
 
-    auto &nullProbsPrefix = scratch.filterNullProbsPrefix;
-    auto &nullProbsSuffix = scratch.filterNullProbsSuffix;
-    nullProbsPrefix.resize(scratch.dpWidth + 4);
-    nullProbsSuffix.resize(scratch.dpWidth + 4);
+    ExpScore scalePerBase[simdWidth]{}, scalePerBaseInverse[simdWidth]{};
+    ExpScore scaleOneNucleotide[simdWidth]{}, scaleTwoNucleotide[simdWidth]{}, scaleCodon[simdWidth]{};
+    buildBatchNullModels(profile, transposedSequenceBases, sequenceLengths, activeCount,
+        scratch.dpWidth, prefixProbabilities, suffixProbabilities,
+        scalePerBase, scalePerBaseInverse, scaleOneNucleotide, scaleTwoNucleotide, scaleCodon);
 
-    nullProbsSuffix[scratch.dpWidth] = 0;
-    for (int i = scratch.dpWidth - 1; i >= 0; i--) {
-        const Float *bg_probs_ptr = profile.log2_bg_probs.data() + 4;
-        const char* indices = (const char*)&transposed_base[i * simdWidth];
-        SimdFloat bg_raw = simdLookup(bg_probs_ptr, indices);
-        simd_t bgCodonEmitProbs(bg_raw);
-
-        Kokkos::Experimental::simd_mask<Float> msk = i + 2 < seqLengths;
-        Kokkos::Experimental::simd_mask<Float> msk_fs2 = i + 1 < seqLengths;
-        Kokkos::Experimental::simd_mask<Float> msk_fs1 = i < seqLengths;
-        simd_t full_codon = (Float)log2(1 - BACKGROUND_FRAMESHIFT_RATE - BACKGROUND_FRAMESHIFT_RATE_2) + bgCodonEmitProbs + nullProbsSuffix[i + 3];
-        simd_t partial_codon = (Float)log2(1 - BACKGROUND_FRAMESHIFT_RATE - BACKGROUND_FRAMESHIFT_RATE_2) + (Float)log2(0.25) * (seqLengths - (Float)i);
-        simd_t t1 = Kokkos::Experimental::condition(msk, full_codon, partial_codon);
-
-        simd_t fs1 = (Float)log2(BACKGROUND_FRAMESHIFT_RATE * 0.25) + nullProbsSuffix[i + 1];
-        simd_t fs2 = (Float)log2(BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625) + nullProbsSuffix[i + 2];
-        simd_t neg_inf_vec((Float)-INFINITY);
-        simd_t t_fs1 = Kokkos::Experimental::condition(msk_fs1, fs1, neg_inf_vec);
-        simd_t t_fs2 = Kokkos::Experimental::condition(msk_fs2, fs2, neg_inf_vec);
-
-        nullProbsSuffix[i] = log2_sum_exp(t1, log2_sum_exp(t_fs1, t_fs2));
+    // Same tail zeroing as above.
+    for (int j = scratch.dpWidth; j < scratch.dpWidth + 4; j++) {
+        for (int k = 0; k < activeCount; k++) {
+            if (j != (int)sequenceLengths[k]) {
+                prefixProbabilities[j][k] = ExpScore{0.0f, 0};
+                suffixProbabilities[j][k] = ExpScore{0.0f, 0};
+            }
+        }
+        for (int k = activeCount; k < (int)simdWidth; k++) {
+            prefixProbabilities[j][k] = ExpScore{0.0f, 0};
+            suffixProbabilities[j][k] = ExpScore{0.0f, 0};
+        }
     }
 
-    nullProbsPrefix[scratch.dpWidth] = 0;
-    const Float *log2_bg_probs_ptr = profile.log2_bg_probs.data() + 4;
-    const Float log2_1_bg_fs = log2(1 - BACKGROUND_FRAMESHIFT_RATE - BACKGROUND_FRAMESHIFT_RATE_2);
-    const Float log2_bg_fs_025 = log2(BACKGROUND_FRAMESHIFT_RATE * 0.25);
-    const Float log2_bg_fs2_00625 = log2(BACKGROUND_FRAMESHIFT_RATE_2 * 0.0625);
-    const Float log2_025 = log2(0.25);
-    const simd_t simd_log2_1_bg_fs(log2_1_bg_fs);
-    const simd_t simd_log2_bg_fs_025(log2_bg_fs_025);
-    const simd_t simd_log2_bg_fs2_00625(log2_bg_fs2_00625);
-    const simd_t simd_log2_025(log2_025);
-    const simd_t simd_neg_inf(-INFINITY);
-
-    for (int i = 0; i < scratch.dpWidth; i++) {
-        const char* indices = (const char*)&transposed_base[(i - 2) * simdWidth];
-        SimdFloat bg_raw = simdLookup(log2_bg_probs_ptr, indices);
-        simd_t bgCodonEmitProbs(bg_raw);
-
-        Kokkos::Experimental::simd_mask<Float> msk_valid = (Float)i < seqLengths;
-
-        simd_t t1;
-        if (i >= 3) {
-            t1 = simd_log2_1_bg_fs + bgCodonEmitProbs + nullProbsPrefix[i - 3];
-        } else if (i == 2) {
-            t1 = simd_log2_1_bg_fs + bgCodonEmitProbs;
-        } else {
-            t1 = simd_log2_1_bg_fs + simd_log2_025 * (Float)(i + 1);
-        }
-
-        simd_t t2 = simd_log2_bg_fs_025 + (i > 0 ? nullProbsPrefix[i - 1] : simd_t(0));
-
-        simd_t t3;
-        if (i >= 2) {
-            t3 = simd_log2_bg_fs2_00625 + nullProbsPrefix[i - 2];
-        } else if (i == 1) {
-            t3 = simd_log2_bg_fs2_00625 + simd_t(0);
-        } else {
-            t3 = simd_neg_inf;
-        }
-
-        simd_t result = log2_sum_exp(t1, log2_sum_exp(t2, t3));
-        nullProbsPrefix[i] = Kokkos::Experimental::condition(msk_valid, result, simd_neg_inf);
-    }
-
-    alignas(64) Float nullEmitTmp[simdWidth] = {0}, nullSeqLogProb[simdWidth] = {0};
-
-    for (int idx = 0; idx < activeCount; idx++) {
-        if (seqLengthArr[idx] >= 3) {
-            nullSeqLogProb[idx] =
-            log2_sum_exp(log2_sum_exp(nullProbsPrefix[seqLengthArr[idx] - 1][idx], nullProbsPrefix[seqLengthArr[idx] - 2][idx]),
-                nullProbsPrefix[seqLengthArr[idx] - 3][idx]
-            );
-        } else {
-            nullSeqLogProb[idx] = -INFINITY;
-        }
-
-        Float null_emit_raw = exp2(-(nullSeqLogProb[idx] / seqLengthArr[idx]));
-        nullEmitTmp[idx] = null_emit_raw;
-    }
-
-    auto nullEmit1 = Kokkos::Experimental::simd_unchecked_load<simd_t>(nullEmitTmp);
-    auto nullEmit2 = nullEmit1 * nullEmit1;
-    auto nullEmit3 = nullEmit2 * nullEmit1;
-
-    nullEmit2 *= (Float)(0.25 * 0.25);
-    nullEmit1 *= (Float)0.25;
-
-    auto null_seq_log_prob_simd = Kokkos::Experimental::simd_unchecked_load<simd_t>(nullSeqLogProb);
-    simd_t inv_actual_seq_len = (Float)1.0 / seqLengths;
-    simd_t nullProbPerPos = null_seq_log_prob_simd * inv_actual_seq_len;
+    simd_t nullScaleOneNucleotide = VecTraits<simd_t>::packScores(scaleOneNucleotide, activeCount);
+    simd_t nullScaleTwoNucleotide = VecTraits<simd_t>::packScores(scaleTwoNucleotide, activeCount);
+    simd_t nullScaleCodon = VecTraits<simd_t>::packScores(scaleCodon, activeCount);
 
     const size_t padded_seq_len = scratch.dpWidth + 4;
     scratch.filterRollingW1[0].resize(padded_seq_len, simd_t(0.0));
     scratch.filterRollingW1[1].resize(padded_seq_len, simd_t(0.0));
     auto &Y0_next = scratch.Y0_next; Y0_next.resize(padded_seq_len, 0.0);
     auto &Y0_curr = scratch.Y0_curr; Y0_curr.resize(padded_seq_len, 0.0);
+#ifdef DUMMEST_POISON
+    // Must be overwritten each row; fail loudly otherwise.
+    std::fill(Y0_curr.begin(), Y0_curr.end(), VecTraits<simd_t>::poison());
+#endif
 
-    auto &nullModelPrefix = scratch.nullModelPrefix; nullModelPrefix.resize(padded_seq_len, 0.0);
-    auto &nullModelSuffix = scratch.nullModelSuffix; nullModelSuffix.resize(padded_seq_len, 0.0);
+    auto &prefixSeed = scratch.nullPrefixSeed; prefixSeed.resize(padded_seq_len, 0.0);
+    auto &suffixSeedFromNext = scratch.nullSuffixSeedFromNext; suffixSeedFromNext.resize(padded_seq_len, 0.0);
+    buildNullSeedModels(scratch.dpWidth, activeCount, sequenceLengths, prefixProbabilities, suffixProbabilities,
+        scalePerBase, scalePerBaseInverse, prefixSeed, suffixSeedFromNext);
 
-    for (int j = 0; j < scratch.dpWidth; j++) {
-        simd_t suffix_exponent = -nullProbPerPos * (seqLengths - (Float)1.0 - (Float)j) + nullProbsSuffix[j + 1];
-        nullModelSuffix[j] = Kokkos::exp2(suffix_exponent);
-
-        simd_t prefix_exponent = -nullProbPerPos * (Float)(j + 1) + nullProbsPrefix[j];
-        nullModelPrefix[j] = Kokkos::exp2(prefix_exponent);
-    }
-
-    const Float *bg_probs_ptr = profile.bg_probs.data() + 4;
-    scratch.bgCodonProbs.resize(scratch.dpWidth);
-    simd_t* bg_codon_probs_base = scratch.bgCodonProbs.data();
-    for (int j = -4; j < scratch.dpWidth + 4; j++) {
-        const char* indices = (const char*)&transposed_base[j * simdWidth];
-        bg_codon_probs_base[j] = simd_t(simdLookup(bg_probs_ptr, indices));
-    }
+    fillBackgroundCodon(scratch, profile, transposedSequenceBases, scratch.dpWidth);
+    simd_t* backgroundCodonBase = scratch.backgroundCodonProbabilities.data();
 
     simd_t globalBest = simd_t(0.0);
 
@@ -441,14 +368,14 @@ void findSimilaritiesBackwardOnly(
         const Params &params = profile.values_v2[i];
         const Float *params_emission_probabilities = profile.values + (i)*profile.width + 4;
 
-        const simd_t enterCoeff = params.enter_match_probability * nullEmit3;
+        const simd_t enterCoeff = params.enter_match_probability * nullScaleCodon;
         const simd_t delta0Coeff = params.delta_prime[0];
-        const simd_t delta1Coeff = params.delta_prime[1] * nullEmit2;
-        const simd_t delta2Coeff = params.delta_prime[2] * nullEmit1;
-        const simd_t alpha0Coeff = params.alpha_prime[0] * nullEmit3;
-        const simd_t alpha1Coeff = params.alpha_prime[1] * nullEmit1;
-        const simd_t alpha2Coeff = params.alpha_prime[2] * nullEmit2;
-        const simd_t beta0Coeff = params.beta_prime[0] * nullEmit3;
+        const simd_t delta1Coeff = params.delta_prime[1] * nullScaleTwoNucleotide;
+        const simd_t delta2Coeff = params.delta_prime[2] * nullScaleOneNucleotide;
+        const simd_t alpha0Coeff = params.alpha_prime[0] * nullScaleCodon;
+        const simd_t alpha1Coeff = params.alpha_prime[1] * nullScaleOneNucleotide;
+        const simd_t alpha2Coeff = params.alpha_prime[2] * nullScaleTwoNucleotide;
+        const simd_t beta0Coeff = params.beta_prime[0] * nullScaleCodon;
         simd_t Z0_ring[4] = {0, 0, 0, 0};
         const simd_t epsCoeff = params.epsilon_prime;
         const simd_t rowScaleCoeff = scale;
@@ -463,10 +390,10 @@ void findSimilaritiesBackwardOnly(
             int r_0 = j & 3;
             int r_3 = (j + 3) & 3;
 
-            const char* indices = (const char*)&transposed_base[(j + 1) * simdWidth];
+            const char* indices = (const char*)&transposedSequenceBases[(j + 1) * simdWidth];
             SimdFloat codon_raw = simdLookup(params_emission_probabilities, indices);
             simd_t codonEmitProbs(codon_raw);
-            simd_t bgCodonEmitProbs = bg_codon_probs_base[j + 1];
+            simd_t backgroundCodonEmission = backgroundCodonBase[j + 1];
 
             simd_t w1NextAtJ = scratch.filterRollingW1[(i + 1) & 1][j];
 
@@ -475,18 +402,21 @@ void findSimilaritiesBackwardOnly(
                 Y0_next[j + 0] * delta0Coeff +
                 w1NextJ2 * delta1Coeff +
                 w1NextJ1 * delta2Coeff +
-                Z0_ring[r_3] * bgCodonEmitProbs * alpha0Coeff +
+                Z0_ring[r_3] * backgroundCodonEmission * alpha0Coeff +
                 w1CurJ2 * alpha2Coeff +
                 w1CurJ1 * alpha1Coeff
-             + nullModelSuffix[j] * rowScaleCoeff;
+             + suffixSeedFromNext[j] * rowScaleCoeff;
 
-            simd_t mid_score = wVal * nullModelPrefix[j];
+            // Past-end lanes carry no mass (same masking as the forward pass).
+            wVal = wVal * VecTraits<simd_t>::activeMask(j, sequenceLengths);
+
+            simd_t mid_score = wVal * prefixSeed[j];
             globalBest = Kokkos::max(globalBest, mid_score);
 
             scratch.filterRollingW1[i & 1][j] = wVal;
 
-            Y0_curr[j] = Kokkos::fma(epsCoeff, Y0_next[j], wVal);
-            simd_t z0_future = Z0_ring[r_3] * bgCodonEmitProbs;
+            Y0_curr[j] = Kokkos::fma(epsCoeff, Y0_next[j], wVal) * VecTraits<simd_t>::activeMask(j, sequenceLengths);
+            simd_t z0_future = Z0_ring[r_3] * backgroundCodonEmission;
             Z0_ring[r_0] = Kokkos::fma(beta0Coeff, z0_future, wVal);
 
             w1NextJ3 = w1NextJ2;
@@ -518,17 +448,19 @@ void backwardPass(const Profile &profile,
              BackwardCtx &ctx, bool needAlign = true) {
     setupBatch(profile, decoded, scratch, activeCount, ctx, needAlign);
     simd_t vzero = VecTraits<simd_t>::zero();
-    const simd_t nullEmit1 = ctx.nullEmit1;
-    const simd_t nullEmit2 = ctx.nullEmit2;
-    const simd_t nullEmit3 = ctx.nullEmit3;
-    uint8_t *transposed_base = scratch.transposedDecoded.data() + 4 * simdWidth;
-    simd_t *bg_codon_probs_base = scratch.bgCodonProbs.data();
-    auto &nullModelPrefix = scratch.nullModelPrefix;
-    auto &nullModelSuffix = scratch.nullModelSuffix;
+    const simd_t nullScaleOneNucleotide = ctx.nullScaleOneNucleotide;
+    const simd_t nullScaleTwoNucleotide = ctx.nullScaleTwoNucleotide;
+    const simd_t nullScaleCodon = ctx.nullScaleCodon;
+    uint8_t *transposedSequenceBases = scratch.transposedDecoded.data() + 4 * simdWidth;
+    simd_t *backgroundCodonBase = scratch.backgroundCodonProbabilities.data();
+    auto &prefixSeed = scratch.nullPrefixSeed;
+    auto &suffixSeedFromNext = scratch.nullSuffixSeedFromNext;
     auto &reverseSide = scratch.reverseSide;
     auto &Y0_next = scratch.Y0_next;
     auto &Y0_curr = scratch.Y0_curr;
     const size_t padded_seq_len = scratch.dpWidth + 4;
+    alignas(64) Float sequenceLengths[simdWidth] = {};
+    fillSequenceLengths(activeCount, decoded, sequenceLengths);
 
         {
         auto gather_w1 = [&](int i_row, int col) -> simd_t {
@@ -546,14 +478,14 @@ void backwardPass(const Profile &profile,
             const Params &params = profile.values_v2[i];
             const Float *params_emission_probabilities = profile.values + (i)*profile.width + 4;
 
-            const simd_t enterCoeff = VecTraits<simd_t>::broadcast(params.enter_match_probability) * nullEmit3;
+            const simd_t enterCoeff = VecTraits<simd_t>::broadcast(params.enter_match_probability) * nullScaleCodon;
             const simd_t delta0Coeff = VecTraits<simd_t>::broadcast(params.delta_prime[0]);
-            const simd_t delta1Coeff = VecTraits<simd_t>::broadcast(params.delta_prime[1]) * nullEmit2;
-            const simd_t delta2Coeff = VecTraits<simd_t>::broadcast(params.delta_prime[2]) * nullEmit1;
-            const simd_t alpha0Coeff = VecTraits<simd_t>::broadcast(params.alpha_prime[0]) * nullEmit3;
-            const simd_t alpha1Coeff = VecTraits<simd_t>::broadcast(params.alpha_prime[1]) * nullEmit1;
-            const simd_t alpha2Coeff = VecTraits<simd_t>::broadcast(params.alpha_prime[2]) * nullEmit2;
-            const simd_t beta0Coeff = VecTraits<simd_t>::broadcast(params.beta_prime[0]) * nullEmit3;
+            const simd_t delta1Coeff = VecTraits<simd_t>::broadcast(params.delta_prime[1]) * nullScaleTwoNucleotide;
+            const simd_t delta2Coeff = VecTraits<simd_t>::broadcast(params.delta_prime[2]) * nullScaleOneNucleotide;
+            const simd_t alpha0Coeff = VecTraits<simd_t>::broadcast(params.alpha_prime[0]) * nullScaleCodon;
+            const simd_t alpha1Coeff = VecTraits<simd_t>::broadcast(params.alpha_prime[1]) * nullScaleOneNucleotide;
+            const simd_t alpha2Coeff = VecTraits<simd_t>::broadcast(params.alpha_prime[2]) * nullScaleTwoNucleotide;
+            const simd_t beta0Coeff = VecTraits<simd_t>::broadcast(params.beta_prime[0]) * nullScaleCodon;
             simd_t Z0_ring[4] = {vzero, vzero, vzero, vzero};
 
             const simd_t epsCoeff = VecTraits<simd_t>::broadcast(params.epsilon_prime);
@@ -581,40 +513,41 @@ void backwardPass(const Profile &profile,
                 int r_0 = j & 3;
                 int r_3 = (j + 3) & 3;
 
-                const char* indices = (const char*)&transposed_base[(j + 1) * simdWidth];
+                const char* indices = (const char*)&transposedSequenceBases[(j + 1) * simdWidth];
                 simd_t codonEmitProbs = VecTraits<simd_t>::lookupEmit(params_emission_probabilities, indices);
-                simd_t bgCodonEmitProbs = bg_codon_probs_base[j + 1];
+                simd_t backgroundCodonEmission = backgroundCodonBase[j + 1];
 
                 // Only gather the one new column needed for next iteration
                 simd_t w1NextAtJ = gather_w1(i + 1, j);
 
                 simd_t wVal =
                     w1NextJ3 * codonEmitProbs * enterCoeff +
-                    Y0_next[j + 0] * delta0Coeff +
+                Y0_next[j] * delta0Coeff +
                     w1NextJ2 * delta1Coeff +
                     w1NextJ1 * delta2Coeff +
-                    Z0_ring[r_3] * bgCodonEmitProbs * alpha0Coeff +
+                    Z0_ring[r_3] * backgroundCodonEmission * alpha0Coeff +
                     w1CurJ2 * alpha2Coeff +
                     w1CurJ1 * alpha1Coeff
-                 + nullModelSuffix[j] * rowScaleCoeff;
+                 + suffixSeedFromNext[j] * rowScaleCoeff;
+
+                // Past-end lanes carry no mass.
+                wVal = wVal * VecTraits<simd_t>::activeMask(j, sequenceLengths);
 
                 scatter_w1(wVal, i, j);
 #ifdef ALIGN
-                // Cheap simd_t accumulate only; the expensive per-lane ExpScore
-                // fixupSide is deferred until after the score gate (hit
-                // batches only), since reverseSideEv is only read there.
+                // Add now; per-base totals are built after the score gate.
                 if (needAlign) {
                     reverseSide[j] = VecTraits<simd_t>::fma(VecTraits<simd_t>::broadcast((Float)1.0), wVal, reverseSide[j]);
                 }
 #endif
                 backwardRowMax = VecTraits<simd_t>::vecMax(backwardRowMax, wVal);
 
-                Y0_curr[j] = VecTraits<simd_t>::fma(epsCoeff, Y0_next[j], wVal);
+                Y0_curr[j] = VecTraits<simd_t>::fma(epsCoeff, Y0_next[j], wVal) * VecTraits<simd_t>::activeMask(j, sequenceLengths);
                 backwardRowMax = VecTraits<simd_t>::vecMax(backwardRowMax, Y0_curr[j]);
-                simd_t z0_future = Z0_ring[r_3] * bgCodonEmitProbs;
+                simd_t z0_future = Z0_ring[r_3] * backgroundCodonEmission;
                 Z0_ring[r_0] = VecTraits<simd_t>::fma(beta0Coeff, z0_future, wVal);
 
-                // Rotate shift registers for next iteration (j-1)
+                // Move to the next base.
                 w1NextJ3 = w1NextJ2;
                 w1NextJ2 = w1NextJ1;
                 w1NextJ1 = w1NextAtJ;
@@ -624,10 +557,7 @@ void backwardPass(const Profile &profile,
 
             std::swap(Y0_curr, Y0_next);
 
-            // Per-row dynamic rescaling (backward): if any lane's row max
-            // exceeds threshold, divide that lane's row-carried state by
-            // 2^64 (exact) and record it. Y0 buffers feed row i-1, whose
-            // inherited scale picks this up; stored rows i+1.. keep theirs.
+            // Halve rows that grew too large; count the halves.
                 alignas(64) Float maxArr[simdWidth];
                 simd_unchecked_store(backwardRowMax, maxArr, Kokkos::Experimental::simd_flag_default);
                 auto [factor, any] = makeRowRescaleFactor(scratch.backwardRescaleCount, i, maxArr, activeCount);
@@ -637,7 +567,7 @@ void backwardPass(const Profile &profile,
                     rescaleRow(Y0_next, 0, (int)padded_seq_len, factor);
                     rescaleRow(Y0_curr, 0, (int)padded_seq_len, factor);
 #ifdef ALIGN
-                    // Include front padding: the EV fixup writes j-3.
+                    // Keep padding in the halve too.
                     if (needAlign) rescaleRow(reverseSide.m, -3, (int)reverseSide.size(), factor);
 #endif
                 }
@@ -647,15 +577,10 @@ void backwardPass(const Profile &profile,
     std::fill(Y0_next.begin(), Y0_next.begin() + padded_seq_len, vzero);
 
     if (bestOut) {
-        // Backward-accumulator best (calibration filter score) without a
-        // second DP: W1 holds raw backward values here.
-        // Promote-then-multiply in pair domain: rp is in row scale backwardRescaleCount[i],
-        // np (nullModel) is static-scale (cum 0). No Float product, so a
-        // capped rp (~1e30/1e150) times a large nullModel can never inf
-        // before promotion. np varies only with j, so the j loop is outer.
+        // Best score without a second DP: convert before multiplying.
         std::array<ExpScore, simdWidth> bestMid{};
         {
-            const simd_t *__restrict__ np = nullModelPrefix.data();
+            const simd_t *__restrict__ np = prefixSeed.data();
             for (int j = 0; j < scratch.dpWidth; j++) {
                 alignas(64) Float narr[simdWidth];
                 simd_unchecked_store(np[j], narr, Kokkos::Experimental::simd_flag_default);
@@ -684,8 +609,8 @@ void backwardPass(const Profile &profile,
     }
 
     // Hand off small values; bulk buffers stay in scratch for forwardPass.
-    ctx.nullEmit1 = nullEmit1;
-    ctx.nullEmit2 = nullEmit2;
-    ctx.nullEmit3 = nullEmit3;
+    ctx.nullScaleOneNucleotide = nullScaleOneNucleotide;
+    ctx.nullScaleTwoNucleotide = nullScaleTwoNucleotide;
+    ctx.nullScaleCodon = nullScaleCodon;
 }
 

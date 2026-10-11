@@ -4,12 +4,8 @@
 #include "dummest-traceback.hh"
 #include "dummest-scalerow.hh"
 
-// Forward half of the unified DP: forward pass over W0 (X fill, wMid gate)
-// + deferred alignment work (fixups, prefixOptimal/suffixOptimal, traceback).
-// Consumes backwardPass outputs in scratch read-only (W1, reverseSide, null
-// models, bg_codon, transposed) plus the small ctx handoff. NOTE:
-// reverseSide fixupSide runs after the score gate (hit batches only), since
-// reverseSideEv is only read there.
+// Forward half: fill X, then (for hits only) flank totals,
+// best-prefix/suffix tables, and traceback. Reads backward outputs.
 void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similarities, const Profile &profile,
              const std::array<std::vector<uint8_t>*, simdWidth> &decoded, std::array<Float, simdWidth> minProbRatio,
              DPScratch &scratch, int activeCount, const BackwardCtx &ctx,
@@ -19,30 +15,37 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
     auto &reverseSide = scratch.reverseSide;
     auto &forwardSideEv = scratch.forwardSideEv;
     auto &reverseSideEv = scratch.reverseSideEv;
-    auto &nullModelPrefix = scratch.nullModelPrefix;
-    auto &nullModelSuffix = scratch.nullModelSuffix;
-    const Float *bg_probs_ptr = profile.bg_probs.data() + 4;
-    uint8_t *transposed_base = scratch.transposedDecoded.data() + 4 * simdWidth;
-    const simd_t nullEmit1 = ctx.nullEmit1;
-    const simd_t nullEmit2 = ctx.nullEmit2;
-    const simd_t nullEmit3 = ctx.nullEmit3;
-    simd_t *bg_codon_probs_base = scratch.bgCodonProbs.data();
+    auto &nullPrefixSeed = scratch.nullPrefixSeed;
+    const Float *backgroundProbs = profile.bg_probs.data() + 4;
+    uint8_t *transposedSequenceBases = scratch.transposedDecoded.data() + 4 * simdWidth;
+    const simd_t nullScaleOneNucleotide = ctx.nullScaleOneNucleotide;
+    const simd_t nullScaleTwoNucleotide = ctx.nullScaleTwoNucleotide;
+    const simd_t nullScaleCodon = ctx.nullScaleCodon;
+    simd_t *backgroundCodonBase = scratch.backgroundCodonProbabilities.data();
     auto &Y0_next = scratch.Y0_next;
     auto &Y0_curr = scratch.Y0_curr;
     // Forward-side inits: Y0_next zero seed, per-lane best trackers and
     // their physical mirrors.
     const size_t fwd_padded = scratch.dpWidth + 4;
     std::fill(Y0_next.begin(), Y0_next.begin() + fwd_padded, vzero);
+#ifdef DUMMEST_POISON
+    // Y0_curr must be overwritten for every j each row; poison it so a missing
+    // write aborts instead of reusing the backward pass's stale row.
+    std::fill(Y0_curr.begin(), Y0_curr.begin() + fwd_padded, VecTraits<simd_t>::poison());
+#endif
     for (int k = 0; k < activeCount; k++) {
         int len = (int)decoded[k]->size();
         scratch.bestMidScore[k].assign(len, ExpScore{0.0, 0});
         scratch.bestMidRow[k].assign(len, -1);
     }
+    // Running-max trackers: zero is the legitimate seed (scoreLess(zero, wMid)
+    // is the update rule), so they stay zero-filled even under poison. Stale
+    // across batches is already cleared by this assign.
     scratch.bestMidScorePhys.assign(fwd_padded, std::array<ExpScore, simdWidth>{});
     scratch.bestMidRowPhys.assign(fwd_padded, std::array<int, simdWidth>{});
 #ifdef ALIGN
     if (needAlign) {
-        forwardSide.assign(nullModelPrefix.size(), vzero);
+        forwardSide.assign(nullPrefixSeed.size(), vzero);
         scratch.X.assign(profile.length + 2, scratch.dpWidth + 4);
     }
 #endif
@@ -56,7 +59,7 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
         seq_len_i[k] = (int)decoded[k]->size();
         seq_len_f[k] = (Float)seq_len_i[k];
     }
-    for (int k = activeCount; k < (int)simdWidth; k++) seq_len_f[k] = (Float)1;
+    for (int k = activeCount; k < (int)simdWidth; k++) seq_len_f[k] = (Float)0;
     for (int i = 0; i <= profile.length; i++) {
         // Dynamic-scale inheritance: this row starts at the previous row's
         // scale, so all W0/Y0 reads below are single-scale by construction.
@@ -66,14 +69,14 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
         const Float *params_emission_probabilities = profile.values + (i)*profile.width + 4;
 
         // Pre-calculate constants
-        const simd_t enterCoeff = VecTraits<simd_t>::broadcast(params.enter_match_probability) * nullEmit3;
+        const simd_t enterCoeff = VecTraits<simd_t>::broadcast(params.enter_match_probability) * nullScaleCodon;
         const simd_t alpha0Coeff = VecTraits<simd_t>::broadcast(params.alpha_prime[0]);
-        const simd_t alpha1Coeff = VecTraits<simd_t>::broadcast(params.alpha_prime[1]) * nullEmit1;
-        const simd_t alpha2Coeff = VecTraits<simd_t>::broadcast(params.alpha_prime[2]) * nullEmit2;
+        const simd_t alpha1Coeff = VecTraits<simd_t>::broadcast(params.alpha_prime[1]) * nullScaleOneNucleotide;
+        const simd_t alpha2Coeff = VecTraits<simd_t>::broadcast(params.alpha_prime[2]) * nullScaleTwoNucleotide;
         const simd_t beta0Coeff = VecTraits<simd_t>::broadcast(params.beta_prime[0]);
         const simd_t delta0Coeff = VecTraits<simd_t>::broadcast(params.delta_prime[0]);
-        const simd_t delta1Coeff = VecTraits<simd_t>::broadcast(params.delta_prime[1]) * nullEmit2;
-        const simd_t delta2Coeff = VecTraits<simd_t>::broadcast(params.delta_prime[2]) * nullEmit1;
+        const simd_t delta1Coeff = VecTraits<simd_t>::broadcast(params.delta_prime[1]) * nullScaleTwoNucleotide;
+        const simd_t delta2Coeff = VecTraits<simd_t>::broadcast(params.delta_prime[2]) * nullScaleOneNucleotide;
         const simd_t epsCoeff = VecTraits<simd_t>::broadcast(params.epsilon_prime);
         // Effective static scale for this row/lane: the seed term is
         // stored in row scale.
@@ -103,21 +106,19 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
 
         int lo = 0, hi = scratch.dpWidth - 1;
 
-        int seq_start = lo;
-
         // Shift register for w[1..3] — avoids 3 matrix reads per iteration
         simd_t w_shift[3] = {vzero, vzero, vzero}; // w_shift[0]=w0(i,j-1), [1]=w0(i,j-2), [2]=w0(i,j-3)
 
-        for (int j = seq_start; j <= hi; j++) {
+        for (int j = lo; j <= hi; j++) {
 
             simd_t w1 = w_shift[0], w2 = w_shift[1], w3 = w_shift[2];
 
             int r_0 = j & 3;
             int r_3 = (j - 3) & 3;
 
-            const char* indices = (const char*)&transposed_base[(j - 2) * simdWidth];
+            const char* indices = (const char*)&transposedSequenceBases[(j - 2) * simdWidth];
             simd_t codonEmitProbs = VecTraits<simd_t>::lookupEmit(params_emission_probabilities, indices);
-            simd_t bgCodonEmitProbs = bg_codon_probs_base[j - 2];
+            simd_t backgroundCodonEmission = backgroundCodonBase[j - 2];
 
             simd_t X_ij = enterCoeff * codonEmitProbs * w3;
 
@@ -155,26 +156,22 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
             }
 #endif
             Z0_ring[r_0] =
-                bgCodonEmitProbs * nullEmit3 *
+                backgroundCodonEmission * nullScaleCodon *
                 (alpha0Coeff * w3 + beta0Coeff * Z0_ring[r_3]);
             Z1_ring[r_0] = alpha1Coeff * w1;
             Z2_ring[r_0] = alpha2Coeff * w2;
 
             simd_t w0 = w0_row_i[j];
-            w0 = w0 + (Z0_ring[r_0] + Z1_ring[r_0] + Z2_ring[r_0] + nullModelPrefix[j] * rowScaleCoeff);
+            w0 = w0 + (Z0_ring[r_0] + Z1_ring[r_0] + Z2_ring[r_0] + nullPrefixSeed[j] * rowScaleCoeff);
 #ifdef ALIGN
-            // Cheap simd_t accumulate only; forwardSideEv fixup is already after
-            // the gate (hit batches only).
+            // Add now; per-base totals are built after the gate.
             if (needAlign) {
                 forwardSide[j] = VecTraits<simd_t>::fma(VecTraits<simd_t>::broadcast((Float)1.0), w0, forwardSide[j]);
             }
 #endif
             forwardRowMax = VecTraits<simd_t>::vecMax(forwardRowMax, w0);
 
-            // Combined wMid = w0 * B(i,j) * 2^STATIC_SHIFT per lane, in
-            // ExpScore: w0 is in forward row scale forwardRescaleCount[i], B
-            // in backward row scale backwardRescaleCount[i]; promote each side
-            // first, since a raw product could overflow before promotion.
+            // Match score per lane: convert each side first to avoid overflow.
             simd_t w1i = gather_w1_i(j);
             // Per-lane variable-length mask (batches pack different lengths)
             simd_t isActive = VecTraits<simd_t>::activeMask(j, seq_len_f);
@@ -183,8 +180,7 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
                 alignas(64) Float w0A[simdWidth], w1iA[simdWidth];
                 simd_unchecked_store(w0, w0A, Kokkos::Experimental::simd_flag_default);
                 simd_unchecked_store(w1i, w1iA, Kokkos::Experimental::simd_flag_default);
-                // Vectorized promote-then-multiply on SoA planes. Past-end
-                // lanes are zeroed before the multiply so they stay zero.
+                // Past-end lanes stay zero.
                 alignas(64) float fM[simdWidth], bM[simdWidth];
                 alignas(64) int fE[simdWidth], bE[simdWidth];
                 batchPromoteRescaled(w0A, scratch.forwardRescaleCount[i].data(), fM, fE, activeCount);
@@ -199,8 +195,7 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
                 for (int k = 0; k < activeCount; k++) wMidArr[k] = ExpScore{wM[k], wE[k]};
             }
             for (int k = 0; k < activeCount; k++) {
-                // Past-end lanes stay zero so their best trackers stay zero
-                // and they emit no hits below.
+                // Past-end lanes report nothing.
                 ExpScore wMid{0.0, 0};
                 if (j < seq_len_i[k]) wMid = wMidArr[k];
                 if (scoreLess(globalBestPair[k], wMid)) globalBestPair[k] = wMid;
@@ -261,12 +256,18 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
         if (minProbRatio[k] >= 0)
             minExp[k] = normalizeScore((double)minProbRatio[k], 0);
     }
+    // Hit mask: lanes that can report an alignment. Gate-pass is a superset
+    // of the report condition (the report adds only an m != 0 check, and
+    // minProbRatio < 0 lanes always report), so masked-off lanes are unread
+    // downstream and their epilogue writes are dead. ALIGN is always defined
+    // (dummest-core.hh), so the mask is always consumed below.
+    bool laneHit[simdWidth] = {};
     {
         bool any_fwd_above = false;
         for (int k = 0; k < activeCount; k++) {
             if (minProbRatio[k] < 0 || !scoreLess(globalBestPair[k], minExp[k])) {
+                laneHit[k] = true;
                 any_fwd_above = true;
-                break;
             }
         }
         if (!any_fwd_above) return;
@@ -274,34 +275,26 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
 
 #ifdef ALIGN
     if (needAlign) {
-        // Deferred right-side fixup (was before the score gate): reverseSideEv
-        // is only read by the prefixOptimal rebuild below, so no-hit batches skip it.
-        // reverseSide sits at row scale backwardRescaleCount[0] (kept there by rescaling on
-        // every trigger); promote with it.
-        reverseSideEv.assign(nullModelPrefix.size());
-        fixupSide(reverseSide, reverseSideEv, nullModelPrefix,
-                    nullEmit1, nullEmit2, nullEmit3,
-                    -1, -2, transposed_base, bg_probs_ptr,
-                    scratch.dpWidth, activeCount,
-                    scratch.backwardRescaleCount[0].data());
-        // Side product only: per-batch max right-side EV exponent.
+        // Skip when no hit: flank totals feed only the tables below.
+        reverseSideEv.assign(nullPrefixSeed.size());
+        forwardSideEv.assign(nullPrefixSeed.size());
+        buildFlankEVs(forwardSide, reverseSide, forwardSideEv, reverseSideEv,
+                      nullPrefixSeed,
+                      nullScaleOneNucleotide, nullScaleTwoNucleotide, nullScaleCodon,
+                      transposedSequenceBases, backgroundProbs,
+                      scratch.dpWidth, activeCount, seq_len_i,
+                      scratch.forwardRescaleCount[profile.length].data(),
+                      scratch.backwardRescaleCount[0].data(),
+                      (double)BACKGROUND_FRAMESHIFT_RATE, (double)BACKGROUND_FRAMESHIFT_RATE_2,
+                      laneHit);
+        // Largest flank values, for picking the rebuild scale.
         sideEVMax(reverseSideEv, scratch.dpWidth, activeCount, scratch.reverseSideEvMaxExp.data());
+        sideEVMax(forwardSideEv, scratch.dpWidth, activeCount, scratch.forwardSideEvMaxExp.data());
 
-        // Deferred prefixOptimal prefix-max chain (bit-exact replica of the former
-        // in-loop chain): max(prefixOptimal(i-1,j), prefixOptimal(i,j-1), reverseSideEv[j],
-        // X(i,j) + prefixOptimal(i-1,j-3)). Runs i ascending / j ascending so every
-        // predecessor is final on read. Only reached when at least one lane
-        // passed the score gate, so no-hit batches skip it entirely.
-        // The X+opt_succ add is batched (no frexp); the max-selects stay
-        // scalar (cheap compares). Exact.
+        // Best-prefix table: best of up, left, flank, match + best before.
         scratch.prefixOptimal.assign(profile.length + 2, scratch.dpWidth + 4);
         scratch.suffixOptimal.assign(profile.length + 2, scratch.dpWidth + 4);
-        // Float-compute prefix-max chain: same recurrence (up, left, X+succ,
-        // reverseSideEv) and tie order, but candidates scale once to a
-        // hoisted row exponent Erow (running prefix max over X rows + side
-        // max, +1 headroom) and combine with plain float add/max; results
-        // pack back to pairs. Max-selects ordering-exact; adds round at
-        // 24 bits and far-below terms flush (fixtures decide).
+        // Same table in plain floats, one shared scale per row.
         {
             const int S = (int)simdWidth;
             const int W = scratch.dpWidth;
@@ -327,6 +320,7 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
                     const std::array<ExpScore, simdWidth> &rs = scratch.reverseSideEv[j];
 #pragma GCC ivdep
                     for (int k = 0; k < activeCount; k++) {
+                        if (!laneHit[k]) continue; // miss lane: row unread downstream
                         const int E = rowExp[k];
                         const float combinedRow = scoreToRowScale(combinedM[j * S + k], combinedE[j * S + k], E);
                         const float reverseSideRow = scoreToRowScale(rs[k].m, rs[k].e, E);
@@ -356,6 +350,7 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
                     const std::array<ExpScore, simdWidth> &rs = scratch.reverseSideEv[j];
 #pragma GCC ivdep
                     for (int k = 0; k < activeCount; k++) {
+                        if (!laneHit[k]) continue; // miss lane: row unread downstream
                         const int E = rowExp[k];
                         const float combinedRow = scoreToRowScale(combinedM[j * S + k], combinedE[j * S + k], E);
                         const float prefixPrevRow = scoreToRowScale(prefixPrevM[(j - 3) * S + k], prefixPrevE[(j - 3) * S + k], E);
@@ -377,25 +372,13 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
 
         {
         // forwardSide sits at row scale forwardRescaleCount[plen] (kept there by rescaling
-        // on every trigger); promote with it.
-        forwardSideEv.assign(nullModelPrefix.size());
-        fixupSide(forwardSide, forwardSideEv, nullModelSuffix,
-                    nullEmit1, nullEmit2, nullEmit3,
-                    +1, +1, transposed_base, bg_probs_ptr,
-                    scratch.dpWidth, activeCount,
-                    scratch.forwardRescaleCount[profile.length].data());
-        // Side product only: per-batch max left-side EV exponent.
-        sideEVMax(forwardSideEv, scratch.dpWidth, activeCount, scratch.forwardSideEvMaxExp.data());
+        // on every trigger); already promoted inside buildFlankEVs above.
+        // forwardSideEv has no back pad (ExpVector<0>); the assign size
+        // dpWidth+4 covers the full read range below.
         }
 
-        // Float-compute suffix-optimal rebuild: same recurrence (down, right,
-        // forwardSideEv, X+succ) and tie order, scaled once per row to Erow
-        // (running suffix max over X rows + side max, +1 headroom) with plain
-        // float add/max; results pack back to pairs. Max-selects
-        // ordering-exact.
-        // MUST read the already-rebuilt row i+1 (suffixOptimal), exactly as the original
-        // in-place W1 rebuild did. W1 keeps its raw backward values and is never
-        // consulted by the traceback.
+        // Best-suffix table, same idea backward.
+        // Reads the row below just finished. W1 stays untouched.
         {
             const int S = (int)simdWidth;
             const int W = scratch.dpWidth;
@@ -409,7 +392,7 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
                     rowExp[k] = mx + 1;
                 }
             };
-            // i == P: no successor row (downRow/succ terms are zero).
+            // Last row: no row below, those terms are zero.
             {
                 int rowExp[simdWidth];
                 rowScaleW(P, rowExp);
@@ -420,6 +403,7 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
                     const std::array<ExpScore, simdWidth> &lv = scratch.forwardSideEv[j];
 #pragma GCC ivdep
                     for (int k = 0; k < activeCount; k++) {
+                        if (!laneHit[k]) continue; // miss lane: row unread downstream
                         const int E = rowExp[k];
                         const float forwardSideRow = scoreToRowScale(lv[k].m, lv[k].e, E);
                         float suffixMax = 0.0f;
@@ -446,8 +430,10 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
                     const std::array<ExpScore, simdWidth> &lv = scratch.forwardSideEv[j];
 #pragma GCC ivdep
                     for (int k = 0; k < activeCount; k++) {
+                        if (!laneHit[k]) continue; // miss lane: row unread downstream
                         const int E = rowExp[k];
-                        const float combinedRow = scoreToRowScale(combinedM[j * S + k], combinedE[j * S + k], E);
+                        // Match ending at j+3 plus suffix after it (S4).
+                        const float combinedRow = scoreToRowScale(combinedM[(j + 3) * S + k], combinedE[(j + 3) * S + k], E);
                         const float suffixNextRow = scoreToRowScale(suffixNextM[(j + 3) * S + k], suffixNextE[(j + 3) * S + k], E);
                         const float combinedPlusSucc = combinedRow + suffixNextRow;
                         const float downRow = scoreToRowScale(suffixNextM[j * S + k], suffixNextE[j * S + k], E);
@@ -471,6 +457,7 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
     // bestMidScorePhys holds static-scale-unit pairs: compare exactly, then
     // materialize doubles only for reporting.
     for (int idx = 0; idx < activeCount; idx++) {
+        if (!laneHit[idx]) continue; // miss lane: trackers unread downstream
         int len = (int)decoded[idx]->size();
         for (int j = 0; j < scratch.dpWidth && j < len; j++) {
             const ExpScore &wMid_k = scratch.bestMidScorePhys[j][idx];
@@ -482,6 +469,7 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
     }
 
     for (int idx = 0; idx < activeCount; idx++) {
+        if (!laneHit[idx]) continue; // miss lane: reports nothing (as before)
         int len = (int)decoded[idx]->size();
 
         scratch.optProfilePosition[idx].assign(len, AlignedSimilarity{ExpScore{}, -INFINITY, 0, 0, {}});
@@ -499,6 +487,11 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
                 };
             }
         }
+        // Lock the mask invariant: the gate-time max and the extracted max
+        // are maxima over the same forward wMid stream, so a hit lane's
+        // report signal cannot disagree with its mask bit.
+        DUMMEST_POISON_ASSERT(bestOverall.m == globalBestPair[idx].m &&
+                              bestOverall.e == globalBestPair[idx].e);
 
         if (minProbRatio[idx] >= 0) {
             if (bestOverall.m != 0.0 && !scoreLess(bestOverall, minExp[idx])) {
@@ -506,7 +499,7 @@ void forwardPass(std::array<std::vector<AlignedSimilarity>, simdWidth> &similari
                     std::cerr << "has" << std::endl;
                 std::ranges::sort(scratch.optProfilePosition[idx], std::greater<>());
                 auto &aligned = scratch.aligned;
-                aligned[idx].assign(decoded[idx]->size() + 0, false);
+                aligned[idx].assign(decoded[idx]->size(), false);
                 // Placeholders have pair.m == 0; the guard keeps them out even
                 // when minProbRatio == 0.
                 for (auto &aligned_similarity : scratch.optProfilePosition[idx]) {
