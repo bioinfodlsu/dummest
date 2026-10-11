@@ -174,8 +174,10 @@ int finalizeProfile(Profile &p, char *consensusSequence, int backgroundProbsType
         double alphaFS1 = INSERT1;
         double alphaFS2 = INSERT2;
         p.values_v2.rbegin()->alpha_prime[0] = alpha * (1 - beta);
-        p.values_v2.rbegin()->alpha_prime[1] = alphaFS1 * (1 - beta);
-        p.values_v2.rbegin()->alpha_prime[2] = alphaFS2 * (1 - beta);
+        // Frameshift insertions exit with probability 1 (beta_1 = beta_2 = 0),
+        // so no (1 - beta) factor is folded into these entries.
+        p.values_v2.rbegin()->alpha_prime[1] = alphaFS1;
+        p.values_v2.rbegin()->alpha_prime[2] = alphaFS2;
 
         p.values_v2.rbegin()->beta_prime[0] = beta;
         // all beta, are equal for now
@@ -183,7 +185,7 @@ int finalizeProfile(Profile &p, char *consensusSequence, int backgroundProbsType
             p.values_v2.rbegin()->beta_prime[j] = 0;
         }
 
-        double delta = probs[2] * (1 - INSERT1 - INSERT2 - DELETE1 - DELETE2);;
+        double delta = probs[2] * (1 - INSERT1 - INSERT2 - DELETE1 - DELETE2);
         double epsilon = probs[3];
         if (i == p.length)
             break;
@@ -192,8 +194,10 @@ int finalizeProfile(Profile &p, char *consensusSequence, int backgroundProbsType
         double deltaFS1 = DELETE1; // simulate delete
         double deltaFS2 = DELETE2;
         p.values_v2.rbegin()->delta_prime[0] = delta * (1 - epsilon1);
-        p.values_v2.rbegin()->delta_prime[1] = deltaFS1 * (1 - epsilon1);
-        p.values_v2.rbegin()->delta_prime[2] = deltaFS2 * (1 - epsilon1);
+        // Frameshift deletions exit with probability 1 (epsilon_1 = epsilon_2 = 0),
+        // so the next-row (1 - epsilon) factor applies to delta_prime[0] only.
+        p.values_v2.rbegin()->delta_prime[1] = deltaFS1;
+        p.values_v2.rbegin()->delta_prime[2] = deltaFS2;
         p.values_v2.rbegin()->epsilon_prime = epsilon * (1 - epsilon1) / (1 - epsilon);
         p.values_v2.rbegin()->enter_match_probability = (1 - alpha - alphaFS1 - alphaFS2 - delta - deltaFS1 - deltaFS2);
 
