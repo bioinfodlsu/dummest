@@ -135,8 +135,8 @@ def main():
         ax_l, ax_r = axes[row, 0], axes[row, 1]
         if full_data is not None:
             plot_survival(ax_l, full_data, args.fit, FB_XLABEL)
-            ax_l.set_title(f"{label} (Forward-backward)\n{full_data['param_str']}")
-            print(f"Fitted {args.fit} ({label} full): {full_data['param_str']}")
+            ax_l.set_title(f"{label} (Forward-backward)\n")
+            #print(f"Fitted {args.fit} ({label} full): {full_data['param_str']}")
         else:
             ax_l.set_xlabel(FB_XLABEL)
             ax_l.set_ylabel("cumulative frequency")
@@ -144,8 +144,8 @@ def main():
             ax_l.set_title(f"{label} (Forward-backward)")
         if filter_data is not None:
             plot_survival(ax_r, filter_data, args.fit, F_XLABEL)
-            ax_r.set_title(f"{label} (Backward)\n{filter_data['param_str']}")
-            print(f"Fitted {args.fit} ({label} filter): {filter_data['param_str']}")
+            ax_r.set_title(f"{label} (Backward)\n")
+            #print(f"Fitted {args.fit} ({label} filter): {filter_data['param_str']}")
         else:
             ax_r.set_xlabel(F_XLABEL)
             ax_r.set_ylabel("cumulative frequency")
