@@ -586,7 +586,7 @@ Filter pass options:\n\
                         Float minProbRatio =
                             (evalueOpt > 0)
                                 ? (std::pow(p.gumbelKmidAnchored * minProbRatioTotal / evalueOpt,
-                                            1.0 / 1.0 /* p.lambda */))
+                                            1.0 / p.lambda))
                                 : -1;
                         if (verbosity > 1)
                             std::cerr << "Profile: " << &charVec[p.nameIdx] << "\n";
