@@ -29,7 +29,7 @@ From: ubuntu:24.04
     Adds CPU-vs-GPU prefilter parity (needs a GPU):
       apptainer test --nv dummest.sif
 
-    Build with ./build_apptainer.sh (requires MMSEQS_SRC=<MMseqs2 fork tree>).
+    Build with ./build_apptainer.sh.
 
 %environment
     export LC_ALL=C

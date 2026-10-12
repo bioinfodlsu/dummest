@@ -8,11 +8,14 @@
 #     only libcuda.so.1, injected by `apptainer --nv`)
 # The host distro/arch must match the image base (Ubuntu noble, amd64).
 #
-# Required:
-#   MMSEQS_SRC=<path to the MMseqs2 fork source tree>
-#   ninja, ccache on PATH (sudo apt install ninja-build ccache)
+# The MMseqs2 fork (branch prefilter) is bundled as the MMseqs2/ submodule;
+# initialize it with: git submodule update --init --recursive
+#
+# Required on PATH:
+#   ninja, ccache (sudo apt install ninja-build ccache)
 #   (plus cmake, nvcc, and cargo when a rebuild is actually needed)
 # Optional:
+#   MMSEQS_SRC=<path>           (default: the bundled MMseqs2/ submodule)
 #   SIF=<output image>          (default: dummest.sif)
 #   CUDA_ARCHS=<semicolon list> (default: 75-real;80-real;86-real;89-real;90-real;120-real)
 #   REBUILD_MMSEQS=1            force a fresh mmseqs build
@@ -31,7 +34,7 @@ SIF="${SIF:-dummest.sif}"
 CUDA_ARCHS="${CUDA_ARCHS:-75-real;80-real;86-real;89-real;90-real;120-real}"
 CACHE="${MMSEQS_BUILD_CACHE:-$HOME/.cache/dummest-apptainer}"
 JOBS="${JOBS:-$(nproc)}"
-MMSEQS_SRC="${MMSEQS_SRC:-}"
+MMSEQS_SRC="${MMSEQS_SRC:-$PWD/MMseqs2}"
 
 command -v apptainer >/dev/null 2>&1 || {
     echo "apptainer not found in PATH" >&2
@@ -53,13 +56,9 @@ command -v ccache >/dev/null 2>&1 || {
     echo "kokkos-5.1.1 submodule not initialized; run: git submodule update --init --recursive" >&2
     exit 1
 }
-if [[ -z "$MMSEQS_SRC" ]]; then
-    echo "MMSEQS_SRC is required (path to the MMseqs2 fork source tree); e.g." >&2
-    echo "  MMSEQS_SRC=/path/to/MMseqs2 ./build_apptainer.sh" >&2
-    exit 1
-fi
 [[ -f "$MMSEQS_SRC/CMakeLists.txt" ]] || {
-    echo "$MMSEQS_SRC/CMakeLists.txt not found" >&2
+    echo "MMseqs2 fork not found at $MMSEQS_SRC" >&2
+    echo "  set MMSEQS_SRC, or run: git submodule update --init --recursive" >&2
     exit 1
 }
 

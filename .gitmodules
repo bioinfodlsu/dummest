@@ -1,3 +1,7 @@
 [submodule "kokkos-5.1.1"]
 	path = kokkos-5.1.1
 	url = https://github.com/kokkos/kokkos.git
+[submodule "MMseqs2"]
+	path = MMseqs2
+	url = https://github.com/bioinfodlsu/MMseqs2
+	branch = prefilter
