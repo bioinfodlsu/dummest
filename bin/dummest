@@ -352,8 +352,8 @@ def main():
             "--ungapped-calib", args.ungapped_calib,
             "--alignment-mode", "2",
         ]
-        if not use_gpu:
-            mmseqs_cmd.extend(["--spaced-kmer-mode", "0", "-s", "7.5"])
+        # Ungapped prefilter runs identically on CPU and GPU (custom fork);
+        # --gpu only selects the device passed to mmseqs.
         if args.ungapped_recalibrate:
             mmseqs_cmd.extend(["--ungapped-recalibrate", "1"])
         print(f"# Ungapped calibration cache: {args.ungapped_calib}"
