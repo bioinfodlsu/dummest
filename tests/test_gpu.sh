@@ -14,7 +14,7 @@ FA=/opt/dummest/samples/MET-target.fa
 for label in cpu gpu; do
     flag=(--gpu off)
     [[ "$label" == gpu ]] && flag=(--gpu on)
-    pipeline.py "$HMM" "$MSA" "$FA" "$NPROC" "${flag[@]}" \
+    dummest "$HMM" "$MSA" "$FA" "$NPROC" "${flag[@]}" \
         --output-fa "$TMP/$label.fa" --batch 1 >"$TMP/$label.log" 2>&1
 done
 python3 - "$TMP/cpu.fa" "$TMP/gpu.fa" <<'PY'

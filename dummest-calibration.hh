@@ -237,7 +237,7 @@ private:
     bool loaded = false;
 
     static std::filesystem::path getCacheFilePath() {
-        // Shared with bin/pipeline.py: $DUMMEST_CACHE_DIR, then
+        // Shared with bin/dummest: $DUMMEST_CACHE_DIR, then
         // $XDG_CACHE_HOME/.dummest-cache, $HOME/.dummest-cache,
         // ./.dummest-cache, $TMPDIR/.dummest-cache, /tmp/.dummest-cache, then
         // the current directory.

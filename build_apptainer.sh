@@ -117,7 +117,7 @@ fi
 
 # --- DUMMEST (host build, portable, cached) ---
 DUMMEST_CACHE="$CACHE/dummest-build"
-if [[ "${REBUILD_DUMMEST:-0}" == "1" || ! -x "$DUMMEST_CACHE/dummestl" ]]; then
+if [[ "${REBUILD_DUMMEST:-0}" == "1" || ! -x "$DUMMEST_CACHE/dummestl_core" ]]; then
     echo "==> building DUMMEST (portable AVX2)"
     need cmake "install the CMake build tool"
     if [[ -f "$DUMMEST_CACHE/CMakeCache.txt" ]]; then
@@ -133,7 +133,7 @@ if [[ "${REBUILD_DUMMEST:-0}" == "1" || ! -x "$DUMMEST_CACHE/dummestl" ]]; then
         -DDUMMEST_SKIP_BIN_COPY=ON \
         "${GEN[@]}" "${LAUNCH[@]}"
     cmake --build "$DUMMEST_CACHE" --parallel "$JOBS" \
-        --target dummest dummestl dummest-build
+        --target dummest_core dummestl_core dummest-build
     echo "==> staged DUMMEST binaries in $DUMMEST_CACHE"
 else
     echo "==> reusing cached DUMMEST: $DUMMEST_CACHE (REBUILD_DUMMEST=1 to rebuild)"
@@ -146,8 +146,8 @@ STAGE_DIR="$PWD/.apptainer-stage"
 trap 'rm -rf "$STAGE_DIR"' EXIT
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR/payload"
-install -m755 "$DUMMEST_CACHE/dummest" "$DUMMEST_CACHE/dummestl" "$DUMMEST_CACHE/dummest-build" "$STAGE_DIR/"
-install -m755 bin/pipeline.py "$STAGE_DIR/"
+install -m755 "$DUMMEST_CACHE/dummest_core" "$DUMMEST_CACHE/dummestl_core" "$DUMMEST_CACHE/dummest-build" "$STAGE_DIR/"
+install -m755 bin/dummest "$STAGE_DIR/"
 install -m755 "$MMSEQS_BIN_PATH" "$STAGE_DIR/mmseqs"
 git ls-files -z --cached --others --exclude-per-directory=.gitignore \
     | while IFS= read -r -d '' f; do [ -f "$f" ] && printf '%s\0' "$f"; done \

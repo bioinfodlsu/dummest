@@ -30,8 +30,8 @@ if [[ -n "${DUMMER_BIN:-}" && -n "${DUMMERL_BIN:-}" ]]; then
     SKIP_BUILD=1
 fi
 BUILD_DIR="${BUILD_DIR:-cmake-build-release}"
-DUMMER_BIN="${DUMMER_BIN:-$BUILD_DIR/dummest}"
-DUMMERL_BIN="${DUMMERL_BIN:-$BUILD_DIR/dummestl}"
+DUMMER_BIN="${DUMMER_BIN:-$BUILD_DIR/dummest_core}"
+DUMMERL_BIN="${DUMMERL_BIN:-$BUILD_DIR/dummestl_core}"
 FP_EVALUE="${FP_EVALUE:-1e-5}"
 NPROC="${NPROC:-$(nproc)}"
 FAIL=0
@@ -48,8 +48,8 @@ if [[ $SKIP_BUILD -eq 0 ]]; then
         log "configuring $BUILD_DIR"
         cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
     fi
-    log "building dummest + dummestl"
-    cmake --build "$BUILD_DIR" --target dummest dummestl -j "$(nproc)"
+    log "building dummest_core + dummestl_core"
+    cmake --build "$BUILD_DIR" --target dummest_core dummestl_core -j "$(nproc)"
 else
     log "DUMMER_BIN/DUMMERL_BIN preset; skipping host build"
 fi
@@ -77,7 +77,7 @@ for spec in "${CASES[@]}"; do
     IFS='|' read -r name bin cpus fa score tol eregex anchor spans <<<"$spec"
     out="$OUTDIR/$name.out"
     log "run $name"
-    python3 bin/pipeline.py "$FIXDIR/herpes.hmm" samples/MET.msa "$fa" "$cpus" \
+    python3 bin/dummest "$FIXDIR/herpes.hmm" samples/MET.msa "$fa" "$cpus" \
         --max --dummest-bin "$bin" >"$out" 2>"$out.err"
     python3 tests/test_overflow_check.py "$out" "$score" "$tol" "$eregex" "$anchor" "$spans" "$FP_EVALUE" \
         || FAIL=1

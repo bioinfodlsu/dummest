@@ -56,7 +56,7 @@ build_one() { # $1=dir $2=poison(ON/OFF) $3=label
             -DDUMMEST_SKIP_BIN_COPY=ON >"$dir.configure.log" 2>&1
     fi
     log "building $label"
-    cmake --build "$dir" --target dummest dummestl -j "$NPROC" >"$dir.build.log" 2>&1
+    cmake --build "$dir" --target dummest_core dummestl_core -j "$NPROC" >"$dir.build.log" 2>&1
 }
 
 build_one "$NORM_DIR" OFF "normal"
@@ -98,14 +98,14 @@ compare_runs() { # $1=lanes $2=trunc(0/1, default 0)
     local outN="$BUILD_DIR/poison_test_normal_${tag}.out"
     local outP="$BUILD_DIR/poison_test_poison_${tag}.out"
     log "run lanes=$lanes trunc=$trunc (normal vs poison)"
-    DUMMEST_CACHE_DIR="$NORM_DIR/.dummest-cache" DUMMEST_MAX_LANES="$lanes" DUMMEST_TRUNC_LANES="$trunc" python3 bin/pipeline.py \
+    DUMMEST_CACHE_DIR="$NORM_DIR/.dummest-cache" DUMMEST_MAX_LANES="$lanes" DUMMEST_TRUNC_LANES="$trunc" python3 bin/dummest \
         "$FIXDIR/herpes.hmm" samples/MET.msa "$FIXDIR/medium.fa" 2 \
         --max --trials "$TRIALS" --length "$CALIB_LEN" \
-        --dummest-bin "$PWD/$NORM_DIR/dummestl" >"$outN" 2>"$outN.err" || FAIL=1
-    DUMMEST_CACHE_DIR="$BUILD_DIR/.dummest-cache" DUMMEST_MAX_LANES="$lanes" DUMMEST_TRUNC_LANES="$trunc" python3 bin/pipeline.py \
+        --dummest-bin "$PWD/$NORM_DIR/dummestl_core" >"$outN" 2>"$outN.err" || FAIL=1
+    DUMMEST_CACHE_DIR="$BUILD_DIR/.dummest-cache" DUMMEST_MAX_LANES="$lanes" DUMMEST_TRUNC_LANES="$trunc" python3 bin/dummest \
         "$FIXDIR/herpes.hmm" samples/MET.msa "$FIXDIR/medium.fa" 2 \
         --max --trials "$TRIALS" --length "$CALIB_LEN" \
-        --dummest-bin "$PWD/$BUILD_DIR/dummestl" >"$outP" 2>"$outP.err" || FAIL=1
+        --dummest-bin "$PWD/$BUILD_DIR/dummestl_core" >"$outP" 2>"$outP.err" || FAIL=1
     # No NaN/inf tokens allowed in either output.
     if grep -Ei 'nan|inf' "$outP" >/dev/null; then
         echo "FAIL lanes=$lanes trunc=$trunc: nan/inf token in poison output"; FAIL=1

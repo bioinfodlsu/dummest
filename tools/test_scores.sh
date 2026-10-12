@@ -5,7 +5,7 @@ source ~/.venv/bin/activate
 
 mkdir -p qc
 
-time bin/dummest samples/MET-test.hmm samples/MET-target.fa -S qc/scores.tsv
+time bin/dummest_core samples/MET-test.hmm samples/MET-target.fa -S qc/scores.tsv
 
 profiles=$(tail -n +2 qc/scores.tsv | cut -f2 | sort -u)
 tmpdir=$(mktemp -d)

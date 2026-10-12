@@ -1,6 +1,8 @@
 version.hh
 bin/dummer*
-bin/dummest*
+bin/dummest_core
+bin/dummestl_core
+bin/dummest-build
 *.sif
 build
 

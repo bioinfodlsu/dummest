@@ -62,7 +62,7 @@ elseif(NOT DEFINED Kokkos_ARCH_NATIVE)
 endif()
 add_subdirectory(kokkos-5.1.1)
 
-# Isolated builds (e.g. profiling runs that own bin/dummestl) can pass
+# Isolated builds (e.g. profiling runs that own bin/dummestl_core) can pass
 # -DDUMMEST_SKIP_BIN_COPY=ON so building never touches bin/.
 option(DUMMEST_SKIP_BIN_COPY "Skip copying built binaries to bin/" OFF)
 
@@ -82,28 +82,28 @@ set(DUMMEST_SOURCES
     dummest-calibration.hh dummest-profile.hh tantan-wrapper.hh version.hh
     can_i_haz_simd.hh)
 
-add_executable(dummest ${DUMMEST_SOURCES})
-target_compile_definitions(dummest PRIVATE DOUBLE FILTER_PASS)
-target_include_directories(dummest PRIVATE "${CMAKE_SOURCE_DIR}/include")
-target_link_libraries(dummest Kokkos::kokkos)
+add_executable(dummest_core ${DUMMEST_SOURCES})
+target_compile_definitions(dummest_core PRIVATE DOUBLE FILTER_PASS)
+target_include_directories(dummest_core PRIVATE "${CMAKE_SOURCE_DIR}/include")
+target_link_libraries(dummest_core Kokkos::kokkos)
 if(NOT DUMMEST_SKIP_BIN_COPY)
-add_custom_command(TARGET dummest POST_BUILD
+add_custom_command(TARGET dummest_core POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:dummest> "${CMAKE_SOURCE_DIR}/bin/dummest")
+        $<TARGET_FILE:dummest_core> "${CMAKE_SOURCE_DIR}/bin/dummest_core")
 endif()
 
-add_executable(dummestl ${DUMMEST_SOURCES})
-target_compile_definitions(dummestl PRIVATE FILTER_PASS)
-target_include_directories(dummestl PRIVATE "${CMAKE_SOURCE_DIR}/include")
-target_link_libraries(dummestl Kokkos::kokkos)
+add_executable(dummestl_core ${DUMMEST_SOURCES})
+target_compile_definitions(dummestl_core PRIVATE FILTER_PASS)
+target_include_directories(dummestl_core PRIVATE "${CMAKE_SOURCE_DIR}/include")
+target_link_libraries(dummestl_core Kokkos::kokkos)
 if(DUMMEST_POISON)
-    target_compile_definitions(dummest PRIVATE DUMMEST_POISON)
-    target_compile_definitions(dummestl PRIVATE DUMMEST_POISON)
+    target_compile_definitions(dummest_core PRIVATE DUMMEST_POISON)
+    target_compile_definitions(dummestl_core PRIVATE DUMMEST_POISON)
 endif()
 if(NOT DUMMEST_SKIP_BIN_COPY)
-add_custom_command(TARGET dummestl POST_BUILD
+add_custom_command(TARGET dummestl_core POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:dummestl> "${CMAKE_SOURCE_DIR}/bin/dummestl")
+        $<TARGET_FILE:dummestl_core> "${CMAKE_SOURCE_DIR}/bin/dummestl_core")
 endif()
 
 add_executable(dummest-build dummest-build.cc dummest-util.hh version.hh priors/gap-priors.hh priors/wheeler4.hh priors/blocks9.hh)
