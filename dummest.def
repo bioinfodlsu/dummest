@@ -21,8 +21,8 @@ From: ubuntu:24.04
       apptainer exec --env DUMMEST_TMP=/host/large_tmp dummest.sif dummest ...
 
     CPU-only smoke test on the bundled fixtures:
-      apptainer exec dummest.sif dummest /opt/dummest/samples/MET-test.hmm \
-          /opt/dummest/samples/MET.msa /opt/dummest/samples/MET-target.fa 4 --batch 1
+      apptainer exec dummest.sif dummest /samples/MET-test.hmm \
+          /samples/MET.msa /samples/MET-target.fa 4 --batch 1
 
     Full in-container suite (smoke + overflow; slow on first run):
       apptainer test dummest.sif
@@ -65,6 +65,7 @@ From: ubuntu:24.04
 
     chmod 755 /usr/local/bin/dummest /usr/local/bin/dummest_core /usr/local/bin/dummestl_core /usr/local/bin/dummest-build /usr/local/bin/mmseqs
     ln -sf dummest /usr/local/bin/pipeline.py
+    ln -sfn /opt/dummest/samples /samples
 
 %runscript
     exec dummest "$@"
@@ -79,7 +80,7 @@ From: ubuntu:24.04
     dummest_core --help | head -5
     # Smoke: full pipeline (MMseqs2 prefilter + dummest) on bundled test data.
     # GPU is auto-selected when present; plain `apptainer test` uses CPU.
-    dummest /opt/dummest/samples/MET-test.hmm /opt/dummest/samples/MET.msa /opt/dummest/samples/MET-target.fa 2 --batch 1
+    dummest /samples/MET-test.hmm /samples/MET.msa /samples/MET-target.fa 2 --batch 1
     # Overflow/rescale regression on the image's own binaries.
     DUMMER_BIN=dummest_core DUMMERL_BIN=dummestl_core bash /opt/dummest/tests/test_overflow.sh
     # CPU-vs-GPU prefilter parity; needs `apptainer test --nv`, skips without a GPU.
