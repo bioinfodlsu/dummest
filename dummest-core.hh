@@ -46,6 +46,7 @@
 #include <queue>
 
 #include <cstdio>
+#include <cstdint>
 
 #include <Kokkos_SIMD.hpp>
 
@@ -133,15 +134,31 @@ int simdRoundUp(int x) { // lowest multiple of simdLen that is >= x
     return x - 1 - (x - 1) % simdLen + simdLen;
 }
 
+// Enable flush-to-zero / flush-denormals for the calling thread. The DP's
+// rescale and score arithmetic assumes subnormals cannot arise (see
+// dummest-batch.hh), which is guaranteed on x86 by FTZ+DAZ and on aarch64 by
+// the FPCR.FZ bit. FPCR/FPU control is per-thread, so every thread must call
+// this. ARM has no separate DAZ: FZ also flushes denormal inputs for Advanced
+// SIMD, which is the closest match to x86 semantics.
+inline void enableFlushToZero() {
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
+    _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+    _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+#elif defined(__aarch64__) && (defined(__GNUC__) || defined(__clang__))
+    std::uint64_t fpcr;
+    __asm__ __volatile__("mrs %0, fpcr" : "=r"(fpcr));
+    fpcr |= std::uint64_t(1) << 24; // FZ: flush denormal results to zero
+    fpcr |= std::uint64_t(1) << 19; // FZ16: same for half-precision
+    __asm__ __volatile__("msr fpcr, %0" ::"r"(fpcr));
+#endif
+}
+
 class ThreadPool {
 public:
     ThreadPool(size_t numThreads) {
         for (size_t i = 0; i < numThreads; ++i) {
             workers.emplace_back([this, i] {
-#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
-                _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
-                _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
-#endif
+                enableFlushToZero();
                 while (true) {
                     std::function<void(int)> task;
                     {
