@@ -1,0 +1,144 @@
+model	accession	nseqs	class	subclass	gene_symbol	description	hierarchy_node
+APH_3p	NF033068.1	281	AMINOGLYCOSIDE	AMINOGLYCOSIDE	aph(3')	APH(3') family aminoglycoside O-phosphotransferase	aph(3')
+bla_class_A	NF033103.1	269	BETA-LACTAM	BETA-LACTAM	bla	class A beta-lactamase	bla-A
+bla_class_C	NF033085.1	203	BETA-LACTAM	BETA-LACTAM	ampC	class C beta-lactamase	bla-C
+bla_subclass_B1	NF033088.2	143	BETA-LACTAM	BETA-LACTAM	bla	subclass B1 metallo-beta-lactamase	bla-B1
+AAC_3	NF033082.0	137	AMINOGLYCOSIDE	GENTAMICIN	aac(3)	aminoglycoside 3-N-acetyltransferase	aac(3)
+cmx_cmrA	NF033135.1	136	PHENICOL	CHLORAMPHENICOL	cml	Cmx/CmrA family chloramphenicol efflux MFS transporter	cmx_cmrA
+phos_trans_CPT	NF033114.1	114	PHENICOL	CHLORAMPHENICOL	cpt	chloramphenicol phosphotransferase CPT	cpt
+bla_subclass_B3	NF033105.1	112	BETA-LACTAM	BETA-LACTAM	bla	subclass B3 metallo-beta-lactamase	bla-B3
+cmlA_floR	NF033134.0	111	PHENICOL	CHLORAMPHENICOL	cml	CmlA/FloR family chloramphenicol efflux MFS transporter	cmlA_floR
+dipept_VanX	NF033115.1	108	GLYCOPEPTIDE	VANCOMYCIN	vanX	D-Ala-D-Ala dipeptidase VanX	vanX
+AAC_3_I	NF033083.0	107	AMINOGLYCOSIDE	GENTAMICIN	aac(3)-I	AAC(3)-I family aminoglycoside N-acetyltransferase	aac(3)-I
+blaOXA-51_like	NF000268.2	104	BETA-LACTAM	CARBAPENEM	blaOXA	OXA-51 family carbapenem-hydrolyzing class D beta-lactamase	blaOXA-51_fam
+blaKPC	NF012141.1	100	BETA-LACTAM	CARBAPENEM	blaKPC	KPC family carbapenem-hydrolyzing class A beta-lactamase	blaKPC
+classA_firm	NF012167.0	92	BETA-LACTAM	BETA-LACTAM	bla	class A beta-lactamase	bla-A_firm
+rif_monoox	NF033145.1	88	RIFAMYCIN	RIFAMPIN	rox	rifampin monooxygenase	rox_gen
+FosX	NF000222.1	67	FOSFOMYCIN	FOSFOMYCIN	fosX	FosX/FosE/FosI family fosfomycin resistance hydrolase	fosX_gen
+bla_class_D_main	NF012161.0	66	BETA-LACTAM	BETA-LACTAM	blaOXA	class D beta-lactamase	blaOXA
+vanT-G-Cterm	NF033131.1	66	GLYCOPEPTIDE	VANCOMYCIN	vanT	serine racemase VanT catalytic subunit	vanT-G_fam
+SHV_LEN_OKP	NF012143.0	63	BETA-LACTAM	BETA-LACTAM	blaSHV	SHV/LEN/OKP family class A beta-lactamase	blaSHV-LEN
+bla_class_B_core	NF012229.1	58	BETA-LACTAM	BETA-LACTAM	bla	metallo-beta-lactamase	bla-B
+D_ala_D_ser_VanG	NF000091.3	51	GLYCOPEPTIDE	VANCOMYCIN	vanG	D-alanine--D-serine ligase VanG	vanG
+blaOXY	NF000271.2	50	BETA-LACTAM	CEPHALOSPORIN	blaOXY	OXY family extended-spectrum class A beta-lactamase	blaOXY
+macrolide_MefA	NF000245.1	49	MACROLIDE	AZITHROMYCIN/ERYTHROMYCIN	mef(A)	macrolide efflux MFS transporter Mef(A)	mef(A)
+macro_glyco_Mgt	NF033129.1	45	MACROLIDE	ERYTHROMYCIN/TYLOSIN	mgt	macrolide-inactivating glycosyltransferase	mgt
+macro_16_ester	NF052610.1	43	MACROLIDE	TYLOSIN	mle	alpha/beta fold macrolide esterase	mle
+bla_B2_CphA	NF000329.2	42	BETA-LACTAM	CARBAPENEM	cphA	CphA family subclass B2 metallo-beta-lactamase	cphA
+ANT_6	NF033084.2	41	AMINOGLYCOSIDE	STREPTOMYCIN	ant(6)	aminoglycoside 6-adenylyltransferase	ant(6)
+CMY2-MIR-ACT-EC	NF012173.1	40	BETA-LACTAM	BETA-LACTAM	ampC	CMY2/MIR/ACT/EC family class C beta-lactamase	CMY2-MIR-ACT-EC
+SHV	NF000285.3	38	BETA-LACTAM	BETA-LACTAM	blaSHV	SHV family class A beta-lactamase	blaSHV
+blaACT	NF000385.4	37	BETA-LACTAM	CEPHALOSPORIN	blaACT	ACT family cephalosporin-hydrolyzing class C beta-lactamase	blaACT
+OKP	NF000265.2	36	BETA-LACTAM	BETA-LACTAM	blaOKP	OKP family broad-spectrum class A beta-lactamase	blaOKP
+trim_DfrB	NF000331.2	36	TRIMETHOPRIM	TRIMETHOPRIM	dfrB	trimethoprim-resistant dihydrofolate reductase DfrB	dfrB
+tet_MFS_V	NF012178.0	36	TETRACYCLINE	TETRACYCLINE	tet(V)	tetracycline efflux MFS transporter Tet(V)	tet(V)
+esterase_mleCBF	NF053693.1	36	MACROLIDE	TYLOSIN	mleCBF	CBF family alpha/beta fold macrolide esterase	mleCBF
+APH_6_Steno	NF012160.0	35	AMINOGLYCOSIDE	AMINOGLYCOSIDE	aph(6)	APH(6) family putative aminoglycoside O-phosphotransferase	aph(6)-Smalt
+FOX-MOX	NF012172.1	35	BETA-LACTAM	BETA-LACTAM	ampC	FOX/MOX family class C beta-lactamase	blaCMY-FOX
+bla_Bc_2	NF033095.1	35	BETA-LACTAM	CARBAPENEM	bla2	BcII family subclass B1 metallo-beta-lactamase	BcII
+OKP-A	NF052571.1	35	BETA-LACTAM	BETA-LACTAM	blaOKP-A	OKP-A family broad-spectrum class A beta-lactamase	blaOKP-A
+Erm23S_rRNA_broad	NF000499.2	34	MACROLIDE	MACROLIDE	erm	23S ribosomal RNA methyltransferase Erm	erm-23S_rRNA
+fosBx1_fam	NF041541.1	34	FOSFOMYCIN	FOSFOMYCIN	fosB	FosBx1 family fosfomycin resistance bacillithiol transferase	fosBx1-fam
+ANT_6_aadS	NF033387.1	32	AMINOGLYCOSIDE	STREPTOMYCIN	aadS	AadS family aminoglycoside 6-adenylyltransferase	aadS_fam
+ANT_3pp_Ic	NF053581.1	32	AMINOGLYCOSIDE	SPECTINOMYCIN/STREPTOMYCIN	ant(3'')-Ic	aminoglycoside nucleotidyltransferase ANT(3'')-Ic	ant(3'')-Ic
+B1_blaCHM	NF041758.1	30	BETA-LACTAM	CARBAPENEM	blaCHM	CHM family subclass B1 metallo-beta-lactamase	blaCHM
+ABCF_VgaF	NF045691.1	30	LINCOSAMIDE	LINCOSAMIDE	vga(F)	ABC-F type ribosomal protection protein Vga(F)	vga(F)
+blaL1	NF033106.1	29	BETA-LACTAM	CARBAPENEM	blaL1	L1 family subclass B3 metallo-beta-lactamase	blaL1
+vanW-gen	NF033128.2	29	GLYCOPEPTIDE	VANCOMYCIN	vanW	glycopeptide resistance accessory protein VanW	vanW
+blaIMP	NF012147.1	27	BETA-LACTAM	CARBAPENEM	blaIMP	IMP family subclass B1 metallo-beta-lactamase	blaIMP
+AAC_6p_Strep	NF000225.3	26	AMINOGLYCOSIDE	AMINOGLYCOSIDE	aac(6')	aminoglycoside 6'-N-acetyltransferase	aac(6')_Strep
+blaOXA-213_like	NF000269.2	26	BETA-LACTAM	CARBAPENEM	blaOXA	OXA-213 family carbapenem-hydrolyzing class D beta-lactamase	blaOXA-213_fam
+AAC_3_II	NF033080.0	26	AMINOGLYCOSIDE	GENTAMICIN	aac(3)-II	AAC(3)-II family aminoglycoside N-acetyltransferase	aac(3)-II
+blaELC	NF050047.1	26	BETA-LACTAM	CEPHALOSPORIN	blaELC	ELC family class C beta-lactamase	blaELC
+vanR_ACDEGLN	NF033117.2	25	GLYCOPEPTIDE	VANCOMYCIN	vanR	VanR-ABDEGLN family response regulator transcription factor	vanR-ABDEGLN
+class_D_Cupria	NF041812.1	25	BETA-LACTAM	CARBAPENEM	blaOXA	OXA-1206 family carbapenem-hydrolyzing class D beta-lactamase	blaOXA-1206_fam
+tet_MFS_A_B_C_D	NF012174.0	23	TETRACYCLINE	TETRACYCLINE	tet	Tet(A)/Tet(B)/Tet(C) family tetracycline efflux MFS transporter	tet_A_B_C_D
+47473_otr	NF000120.3	22	TETRACYCLINE	TETRACYCLINE	otr(A)	tetracycline resistance ribosomal protection protein Otr(A)	otr(A)
+blaDIM_SIM_IMP	NF012145.1	22	BETA-LACTAM	CARBAPENEM	blaDIM	DIM/SIM/IMP family subclass B1 metallo-beta-lactamase	blaDIM-SIM-IMP
+ANT_3pp_I	NF012157.0	22	AMINOGLYCOSIDE	SPECTINOMYCIN/STREPTOMYCIN	ant(3'')	AadA family aminoglycoside 3''-O-nucleotidyltransferase	ant(3'')-I
+blaAHM	NF049846.1	22	BETA-LACTAM	CARBAPENEM	blaAHM	AHM family subclass B3-like metallo-beta-lactamase	blaAHM
+ANT_4p_I	NF033061.1	21	AMINOGLYCOSIDE	KANAMYCIN/TOBRAMYCIN	ant(4')-I	ANT(4')-I family aminoglycoside nucleotidyltransferase	ant(4')-I
+blaCSA	NF033698.1	21	BETA-LACTAM	CEPHALOTHIN	blaCSA	CSA family class C beta-lactamase	blaCSA
+tet_MFS_30	NF045486.1	21	TETRACYCLINE	TETRACYCLINE	tet(30)	tetracycline efflux MFS transporter Tet(30)	tet(30)
+AAC_6p_Serra	NF000021.4	20	AMINOGLYCOSIDE	AMINOGLYCOSIDE	aac(6')	aminoglycoside 6'-N-acetyltransferase	aac(6')_Serra
+penta_rpt_QnrB	NF000420.1	20	QUINOLONE	QUINOLONE	qnrB	QnrB family quinolone resistance pentapeptide repeat protein	qnrB
+ampC_Kaer	NF041662.1	20	BETA-LACTAM	CEPHALOSPORIN	ampC-Kaer	AmpC-Kaer family extended-spectrum class C beta-lactamase	ampC_Kaer
+blaPEN-Bcc	NF000320.3	19	BETA-LACTAM	BETA-LACTAM	blaPEN-bcc	PEN family class A beta-lactamase, Bcc-type	blaPEN-bcc
+mac_hydro_EstT	NF041759.1	19	MACROLIDE	TYLOSIN	estT	macrolide hydrolase EstT	estT
+AAC_6p_group_E	NF043067.1	19	AMINOGLYCOSIDE	AMINOGLYCOSIDE	aac(6')	aminoglycoside 6'-N-acetyltransferase	aac(6')_E
+OKP-B	NF051479.1	19	BETA-LACTAM	BETA-LACTAM	blaOKP-B	OKP-B family broad-spectrum class A beta-lactamase	blaOKP-B
+bla-A_Chryseo	NF000447.2	18	BETA-LACTAM	BETA-LACTAM	bla-A	CGA/CIA family class A beta-lactamase	bla-A_Chryseo
+blaGES	NF012103.0	18	BETA-LACTAM	CEPHALOSPORIN	blaGES	GES family class A beta-lactamase	blaGES
+blaBJP	NF012140.0	18	BETA-LACTAM	CARBAPENEM	blaBJP	BJP family subclass B3 metallo-beta-lactamase	blaBJP
+blaB-IND-MUS	NF012146.1	18	BETA-LACTAM	BETA-LACTAM	bla	BlaB/IND/MUS family subclass B1 metallo-beta-lactamase	blaB-IND-MUS
+blaOXA-VL06	NF040784.1	18	BETA-LACTAM	CARBAPENEM	blaOXA	OXA-1090 family carbapenem-hydrolyzing class D beta-lactamase	blaOXA-VL06
+chloram_CatA	NF000491.1	17	PHENICOL	CHLORAMPHENICOL	catA	type A chloramphenicol O-acetyltransferase	catA
+Fos_GSH	NF000496.2	17	FOSFOMYCIN	FOSFOMYCIN	fos	fosfomycin resistance glutathione transferase	fos_GT
+vanR_FM	NF033120.0	17	GLYCOPEPTIDE	VANCOMYCIN	vanR	vancomycin resistance response regulator transcription factor, VanR-F/VanR-M family	vanR-FM
+rifampin_ARR	NF033144.1	17	RIFAMYCIN	RIFAMYCIN	arr	NAD(+)--rifampin ADP-ribosyltransferase	arr
+blaPenB	NF041138.1	17	BETA-LACTAM	BETA-LACTAM	blaPEN-B	PEN-B family class A beta-lactamase	blaPEN-B
+blaCESS	NF050797.1	17	BETA-LACTAM	CEPHALOSPORIN	blaCESS	CESS family extended-spectrum class A beta-lactamase	blaCESS
+esterase_mleBCA	NF053684.1	17	MACROLIDE	TYLOSIN	mleBCA	BCA family alpha/beta fold macrolide esterase	mleBCA
+AAC_6p_Acine	NF000224.3	16	AMINOGLYCOSIDE	AMIKACIN/KANAMYCIN/TOBRAMYCIN	aac(6')-I	AAC(6')-Ighjkrstuvwx family aminoglycoside N-acetyltransferase	aac(6')_Acine
+NshR_TsnR	NF000477.1	16	THIOSTREPTON	THIOSTREPTON	nshR	NshR/TsnR family 23S rRNA methyltransferase	nshR_tsnR
+APH_3p_I	NF033059.2	16	AMINOGLYCOSIDE	GENTAMICIN/KANAMYCIN	aph(3')-I	APH(3')-I family aminoglycoside O-phosphotransferase	aph(3')-I
+bla1	NF033096.2	16	BETA-LACTAM	BETA-LACTAM	bla	class A beta-lactamase Bla1	bla1
+tet_protect_M_W	NF033148.1	16	TETRACYCLINE	TETRACYCLINE	tet	TetM/TetW/TetO/TetS family tetracycline resistance ribosomal protection protein	tet(M-W-O-S)
+AAC_2p_IIb	NF033472.1	16	AMINOGLYCOSIDE	KASUGAMYCIN	aac(2')-IIb	kasugamycin N-acetyltransferase AAC(2')-IIb	aac(2')-IIb
+blaPenA	NF041143.1	16	BETA-LACTAM	BETA-LACTAM	blaPEN-A	PEN-A family class A beta-lactamase	blaPEN-A
+blaOXA-2_like	NF000267.2	15	BETA-LACTAM	BETA-LACTAM	blaOXA	OXA-2 family class D beta-lactamase	blaOXA-2_fam
+self_FomB_kinase	NF000361.1	15	FOSFOMYCIN	FOSFOMYCIN	fomB	FomB family phosphonate monophosphate kinase	fomB
+blaPNC	NF045671.1	15	BETA-LACTAM	CEPHALOSPORIN	blaPNC	PNC family class C beta-lactamase	blaPNC
+blaASDC	NF047361.1	15	BETA-LACTAM	BETA-LACTAM	blaASDC	ASDC family class C beta-lactamase	blaASDC
+blaCOR_B1	NF047974.1	15	BETA-LACTAM	CARBAPENEM	blaCOR	COR family subclass B1 metallo-beta-lactamase	blaCOR
+ABCF_Sal	NF000169.2	14	LINCOSAMIDE/PLEUROMUTILIN/STREPTOGRAMIN	LINCOSAMIDE/PLEUROMUTILIN/STREPTOGRAMIN	sal	Sal family ABC-F type ribosomal protection protein	sal
+fosM_gen	NF038306.1	14	FOSFOMYCIN	FOSFOMYCIN	fosM	FosM family fosfomycin resistance protein	fosM
+bla_B1_long	NF041269.1	14	BETA-LACTAM	CARBAPENEM	bla	subclass B1 metallo-beta-lactamase, long type	bla-B1_long
+APH_3p_Ia	NF051474.1	14	AMINOGLYCOSIDE	KANAMYCIN	aph(3')-Ia	aminoglycoside O-phosphotransferase APH(3')-Ia	aph(3')-Ia
+vanH_gen	NF000492.1	13	GLYCOPEPTIDE	VANCOMYCIN	vanH	D-lactate dehydrogenase VanH	vanH
+SubclassA2	NF012099.1	13	BETA-LACTAM	BETA-LACTAM	bla	class A beta-lactamase, subclass A2	bla-A2
+AAC_3_IV	NF033081.0	13	AMINOGLYCOSIDE	GENTAMICIN	aac(3)-IV	AAC(3)-IV family aminoglycoside N-acetyltransferase	aac(3)_IV_fam
+APH_6_Ic_gen	NF033614.1	13	AMINOGLYCOSIDE	STREPTOMYCIN	aph(6)-I	APH(6)-I family aminoglycoside O-phosphotransferase	aph(6)-Ic_gen
+blaOXA-12_like	NF033702.0	13	BETA-LACTAM	BETA-LACTAM	blaOXA	OXA-12 family class D beta-lactamase	blaOXA-12_fam
+blaSED_CdiA_fam	NF049858.1	13	BETA-LACTAM	BETA-LACTAM	bla	CdiA/SED family class A beta-lactamase	blaSED_CdiA
+beta_lac_CdiA	NF049885.1	13	BETA-LACTAM	BETA-LACTAM	cdiA	CdiA family class A beta-lactamase	cdiA
+FosA	NF000221.4	12	FOSFOMYCIN	FOSFOMYCIN	fosA	FosA family fosfomycin resistance glutathione transferase	fosA_gen
+MECA_PBP2A	NF000237.1	12	BETA-LACTAM	METHICILLIN	mec	PBP2a family beta-lactam-resistant peptidoglycan transpeptidase	mec_gen
+macrolide_MphB	NF000242.2	12	MACROLIDE	ERYTHROMYCIN/SPIRAMYCIN/TELITHROMYCIN	mph(B)	Mph(B) family macrolide 2'-phosphotransferase	mph(B)
+blaR1_generic	NF000326.1	12	BETA-LACTAM	BETA-LACTAM	blaR1	BlaR1 family beta-lactam sensor/signal transducer	blaR1_gen
+fosA7	NF032892.0	12	FOSFOMYCIN	FOSFOMYCIN	fosA7	FosA7 family fosfomycin resistance glutathione transferase	fosA7_fam
+AAC_6p_Ib	NF033074.0	12	AMINOGLYCOSIDE	AMINOGLYCOSIDE	aac(6')-Ib	AAC(6')-Ib family aminoglycoside 6'-N-acetyltransferase	aac(6')-Ib
+HK_VanS_ACDEFG	NF033091.0	12	GLYCOPEPTIDE	VANCOMYCIN	vanS	vancomycin resistance histidine kinase VanS	vanS_ACDEFG
+sensor_BlaR1	NF033108.1	12	BETA-LACTAM	BETA-LACTAM	blaR1	beta-lactam sensor/signal transducer BlaR1	blaR1
+polymyxin_MCR3	NF033408.5	12	COLISTIN	COLISTIN	mcr-3	MCR-3 family phosphoethanolamine--lipid A transferase	mcr-3
+blaPRC	NF038359.1	12	BETA-LACTAM	BETA-LACTAM	blaPRC	PRC family class C beta-lactamase	blaPRC
+APH_9_Ia	NF000052.4	11	AMINOGLYCOSIDE	SPECTINOMYCIN	aph(9)-Ia	aminoglycoside O-phosphotransferase APH(9)-Ia	aph(9)-Ia
+CMY2	NF000191.1	11	BETA-LACTAM	CEPHALOSPORIN	blaCMY	CMY-2 family class C beta-lactamase	blaCMY
+D_ala_D_lac	NF000206.1	11	GLYCOPEPTIDE	VANCOMYCIN	vanA	D-alanine--(R)-lactate ligase	vanA-all
+blaPLA_ORN_TER	NF000275.2	11	BETA-LACTAM	BETA-LACTAM	bla	PLA/ORN/TER family class A beta-lactamase	blaPLA-ORN-TER
+blaFONA	NF000323.2	11	BETA-LACTAM	BETA-LACTAM	blaFONA	FONA family class A beta-lactamase	blaFONA
+trim_DfrA1_like	NF000330.1	11	TRIMETHOPRIM	TRIMETHOPRIM	dfrA	trimethoprim-resistant dihydrofolate reductase DfrA	dfrA
+bla-B1-FLAV	NF000450.2	11	BETA-LACTAM	CARBAPENEM	bla-B1-FLAV	subclass B1 metallo-beta-lactamase	bla-B1-FLAV
+tet_protect_Q	NF012154.0	11	TETRACYCLINE	TETRACYCLINE	tet(Q)	tetracycline resistance ribosomal protection protein Tet(Q)	tet(Q)
+blaCTX-M	NF033089.1	11	BETA-LACTAM	CEPHALOSPORIN	blaCTX-M	CTX-M family extended-spectrum class A beta-lactamase	blaCTX-M
+garosamine_AAA	NF038208.1	11	AMINOGLYCOSIDE	GENTAMICIN	gar	Gar/GrdA family gentamicin resistance ATP-binding protein	garos_AAA
+blaAMZ	NF041741.1	11	BETA-LACTAM	CEPHALOSPORIN	blaAMZ	AMZ family class C beta-lactamase	blaAMZ
+ANT_9_Ic	NF045909.1	11	AMINOGLYCOSIDE	SPECTINOMYCIN	ant(9)-Ic	aminoglycoside nucleotidyltransferase ANT(9)-Ic	ant(9)-Ic
+AAC_6p_Entco	NF000165.3	10	AMINOGLYCOSIDE	AMINOGLYCOSIDE	aac(6')-I	aminoglycoside N-acetyltransferase AAC(6')-Ii	aac(6')_Entco
+sat4	NF000360.1	10	STREPTOTHRICIN	STREPTOTHRICIN	sat4	streptothricin N-acetyltransferase Sat4	sat4
+blaIMI	NF000400.3	10	BETA-LACTAM	CARBAPENEM	blaIMI	IMI family carbapenem-hydrolyzing class A beta-lactamase	blaIMI
+CfrAB	NF000424.4	10	LINCOSAMIDE/MACROLIDE/STREPTOGRAMIN	LINCOSAMIDE/MACROLIDE/STREPTOGRAMIN	cfr	Cfr family 23S rRNA (adenine(2503)-C(8))-methyltransferase	cfr_gen
+blaCAU	NF000427.2	10	BETA-LACTAM	CARBAPENEM	blaCAU	CAU/MBL1b family subclass B3 metallo-beta-lactamase	blaCAU/MBL1b
+blaVIM	NF012100.0	10	BETA-LACTAM	CARBAPENEM	blaVIM	VIM family subclass B1 metallo-beta-lactamase	blaVIM
+erm_B_23S_MT	NF012220.1	10	LINCOSAMIDE/MACROLIDE/STREPTOGRAMIN	CLINDAMYCIN/ERYTHROMYCIN/STREPTOGRAMIN B	erm(B)	23S rRNA (adenine(2058)-N(6))-methyltransferase Erm(B)	erm(B)
+blaB	NF033107.1	10	BETA-LACTAM	CARBAPENEM	blaB	BlaB family subclass B1 metallo-beta-lactamase	blaB
+sensor_MecR1	NF033109.1	10	BETA-LACTAM	METHICILLIN	mecR1	beta-lactam sensor/signal transducer MecR1	mecR1
+ANT_3pp_AadA1	NF033126.1	10	AMINOGLYCOSIDE	STREPTOMYCIN	aadA1	ANT(3'')-Ia family aminoglycoside nucleotidyltransferase AadA1	aadA1
+poly_MCR3_broad	NF033409.0	10	COLISTIN	COLISTIN	mcr-3	MCR-3-related phosphoethanolamine--lipid A transferase	mcr-3_set
+fosA8	NF033933.0	10	FOSFOMYCIN	FOSFOMYCIN	fosA8	FosA8 family fosfomycin resistance glutathione transferase	fosA8_fam
+B3_blaSPR	NF041137.2	10	BETA-LACTAM	BETA-LACTAM	blaSPR	SPR family subclass B3 metallo-beta-lactamase	blaSPR
+Erm46	NF042988.1	10	LINCOSAMIDE/MACROLIDE/STREPTOGRAMIN	AZITHROMYCIN/CLINDAMYCIN/ERYTHROMYCIN/STREPTOGRAMIN B/VIRGINIAMYCIN	erm(46)	23S rRNA (adenine(2058)-N(6))-methyltransferase Erm(46)	erm(46)
+blaOXA-1327_like	NF047782.1	10	BETA-LACTAM	BETA-LACTAM	blaOXA	OXA-1327 family class D beta-lactamase	blaOXA-1327_fam
+16S_A1408_WarA	NF051863.1	10	AMINOGLYCOSIDE	AMINOGLYCOSIDE	warA	16S rRNA (adenine(1408)-N(1))-methyltransferase WarA	warA
+esterase_mleBRB	NF053683.1	10	MACROLIDE	TYLOSIN	mleBRB	BRB family alpha/beta fold macrolide esterase	mleBRB
+FosA12	NF053877.1	10	FOSFOMYCIN	FOSFOMYCIN	fosA12	fosfomycin resistance glutathione transferase FosA12	fosA12

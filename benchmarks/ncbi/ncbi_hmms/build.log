@@ -1,0 +1,620 @@
+Loading core-AMR model list from NCBIfam-AMRFinder.tsv ...
+  697 core-AMR models in filter table
+  38394 accession->label mappings from hmm_PGAP.tsv
+Resolving SEED files and applying count filter ...
+  Warning: no PGAP label for NF058698.1 (blaGUA); skipped (version drift)
+  Warning: no PGAP label for NF058701.1 (blaBAS); skipped (version drift)
+  Warning: no PGAP label for NF058748.1 (blaACES); skipped (version drift)
+  143 models with >=10 sequences (4861 total sequences)
+  Warning: 3 models without PGAP label
+  Class balance of kept models:
+    BETA-LACTAM                                 66
+    AMINOGLYCOSIDE                              26
+    GLYCOPEPTIDE                                 9
+    FOSFOMYCIN                                   9
+    MACROLIDE                                    9
+    TETRACYCLINE                                 6
+    PHENICOL                                     4
+    LINCOSAMIDE/MACROLIDE/STREPTOGRAMIN          3
+    RIFAMYCIN                                    2
+    TRIMETHOPRIM                                 2
+    COLISTIN                                     2
+    LINCOSAMIDE                                  1
+    QUINOLONE                                    1
+    THIOSTREPTON                                 1
+    LINCOSAMIDE/PLEUROMUTILIN/STREPTOGRAMIN      1
+    STREPTOTHRICIN                               1
+
+[1/143] APH_3p (NF033068.1): 281 sequences
+    Alignment staged: ncbi_hmms/APH_3p.aln.fa
+    HMM written: ncbi_hmms/APH_3p.hmm
+
+[2/143] bla_class_A (NF033103.1): 269 sequences
+    Alignment staged: ncbi_hmms/bla_class_A.aln.fa
+    HMM written: ncbi_hmms/bla_class_A.hmm
+
+[3/143] bla_class_C (NF033085.1): 203 sequences
+    Alignment staged: ncbi_hmms/bla_class_C.aln.fa
+    HMM written: ncbi_hmms/bla_class_C.hmm
+
+[4/143] bla_subclass_B1 (NF033088.2): 143 sequences
+    Alignment staged: ncbi_hmms/bla_subclass_B1.aln.fa
+    HMM written: ncbi_hmms/bla_subclass_B1.hmm
+
+[5/143] AAC_3 (NF033082.0): 137 sequences
+    Alignment staged: ncbi_hmms/AAC_3.aln.fa
+    HMM written: ncbi_hmms/AAC_3.hmm
+
+[6/143] cmx_cmrA (NF033135.1): 136 sequences
+    Alignment staged: ncbi_hmms/cmx_cmrA.aln.fa
+    HMM written: ncbi_hmms/cmx_cmrA.hmm
+
+[7/143] phos_trans_CPT (NF033114.1): 114 sequences
+    Alignment staged: ncbi_hmms/phos_trans_CPT.aln.fa
+    HMM written: ncbi_hmms/phos_trans_CPT.hmm
+
+[8/143] bla_subclass_B3 (NF033105.1): 112 sequences
+    Alignment staged: ncbi_hmms/bla_subclass_B3.aln.fa
+    HMM written: ncbi_hmms/bla_subclass_B3.hmm
+
+[9/143] cmlA_floR (NF033134.0): 111 sequences
+    Alignment staged: ncbi_hmms/cmlA_floR.aln.fa
+    HMM written: ncbi_hmms/cmlA_floR.hmm
+
+[10/143] dipept_VanX (NF033115.1): 108 sequences
+    Alignment staged: ncbi_hmms/dipept_VanX.aln.fa
+    HMM written: ncbi_hmms/dipept_VanX.hmm
+
+[11/143] AAC_3_I (NF033083.0): 107 sequences
+    Alignment staged: ncbi_hmms/AAC_3_I.aln.fa
+    HMM written: ncbi_hmms/AAC_3_I.hmm
+
+[12/143] blaOXA-51_like (NF000268.2): 104 sequences
+    Alignment staged: ncbi_hmms/blaOXA-51_like.aln.fa
+    HMM written: ncbi_hmms/blaOXA-51_like.hmm
+
+[13/143] blaKPC (NF012141.1): 100 sequences
+    Alignment staged: ncbi_hmms/blaKPC.aln.fa
+    HMM written: ncbi_hmms/blaKPC.hmm
+
+[14/143] classA_firm (NF012167.0): 92 sequences
+    Alignment staged: ncbi_hmms/classA_firm.aln.fa
+    HMM written: ncbi_hmms/classA_firm.hmm
+
+[15/143] rif_monoox (NF033145.1): 88 sequences
+    Alignment staged: ncbi_hmms/rif_monoox.aln.fa
+    HMM written: ncbi_hmms/rif_monoox.hmm
+
+[16/143] FosX (NF000222.1): 67 sequences
+    Alignment staged: ncbi_hmms/FosX.aln.fa
+    HMM written: ncbi_hmms/FosX.hmm
+
+[17/143] bla_class_D_main (NF012161.0): 66 sequences
+    Alignment staged: ncbi_hmms/bla_class_D_main.aln.fa
+    HMM written: ncbi_hmms/bla_class_D_main.hmm
+
+[18/143] vanT-G-Cterm (NF033131.1): 66 sequences
+    Alignment staged: ncbi_hmms/vanT-G-Cterm.aln.fa
+    HMM written: ncbi_hmms/vanT-G-Cterm.hmm
+
+[19/143] SHV_LEN_OKP (NF012143.0): 63 sequences
+    Alignment staged: ncbi_hmms/SHV_LEN_OKP.aln.fa
+    HMM written: ncbi_hmms/SHV_LEN_OKP.hmm
+
+[20/143] bla_class_B_core (NF012229.1): 58 sequences
+    Alignment staged: ncbi_hmms/bla_class_B_core.aln.fa
+    HMM written: ncbi_hmms/bla_class_B_core.hmm
+
+[21/143] D_ala_D_ser_VanG (NF000091.3): 51 sequences
+    Alignment staged: ncbi_hmms/D_ala_D_ser_VanG.aln.fa
+    HMM written: ncbi_hmms/D_ala_D_ser_VanG.hmm
+
+[22/143] blaOXY (NF000271.2): 50 sequences
+    Alignment staged: ncbi_hmms/blaOXY.aln.fa
+    HMM written: ncbi_hmms/blaOXY.hmm
+
+[23/143] macrolide_MefA (NF000245.1): 49 sequences
+    Alignment staged: ncbi_hmms/macrolide_MefA.aln.fa
+    HMM written: ncbi_hmms/macrolide_MefA.hmm
+
+[24/143] macro_glyco_Mgt (NF033129.1): 45 sequences
+    Alignment staged: ncbi_hmms/macro_glyco_Mgt.aln.fa
+    HMM written: ncbi_hmms/macro_glyco_Mgt.hmm
+
+[25/143] macro_16_ester (NF052610.1): 43 sequences
+    Alignment staged: ncbi_hmms/macro_16_ester.aln.fa
+    HMM written: ncbi_hmms/macro_16_ester.hmm
+
+[26/143] bla_B2_CphA (NF000329.2): 42 sequences
+    Alignment staged: ncbi_hmms/bla_B2_CphA.aln.fa
+    HMM written: ncbi_hmms/bla_B2_CphA.hmm
+
+[27/143] ANT_6 (NF033084.2): 41 sequences
+    Alignment staged: ncbi_hmms/ANT_6.aln.fa
+    HMM written: ncbi_hmms/ANT_6.hmm
+
+[28/143] CMY2-MIR-ACT-EC (NF012173.1): 40 sequences
+    Alignment staged: ncbi_hmms/CMY2-MIR-ACT-EC.aln.fa
+    HMM written: ncbi_hmms/CMY2-MIR-ACT-EC.hmm
+
+[29/143] SHV (NF000285.3): 38 sequences
+    Alignment staged: ncbi_hmms/SHV.aln.fa
+    HMM written: ncbi_hmms/SHV.hmm
+
+[30/143] blaACT (NF000385.4): 37 sequences
+    Alignment staged: ncbi_hmms/blaACT.aln.fa
+    HMM written: ncbi_hmms/blaACT.hmm
+
+[31/143] OKP (NF000265.2): 36 sequences
+    Alignment staged: ncbi_hmms/OKP.aln.fa
+    HMM written: ncbi_hmms/OKP.hmm
+
+[32/143] trim_DfrB (NF000331.2): 36 sequences
+    Alignment staged: ncbi_hmms/trim_DfrB.aln.fa
+    HMM written: ncbi_hmms/trim_DfrB.hmm
+
+[33/143] tet_MFS_V (NF012178.0): 36 sequences
+    Alignment staged: ncbi_hmms/tet_MFS_V.aln.fa
+    HMM written: ncbi_hmms/tet_MFS_V.hmm
+
+[34/143] esterase_mleCBF (NF053693.1): 36 sequences
+    Alignment staged: ncbi_hmms/esterase_mleCBF.aln.fa
+    HMM written: ncbi_hmms/esterase_mleCBF.hmm
+
+[35/143] APH_6_Steno (NF012160.0): 35 sequences
+    Alignment staged: ncbi_hmms/APH_6_Steno.aln.fa
+    HMM written: ncbi_hmms/APH_6_Steno.hmm
+
+[36/143] FOX-MOX (NF012172.1): 35 sequences
+    Alignment staged: ncbi_hmms/FOX-MOX.aln.fa
+    HMM written: ncbi_hmms/FOX-MOX.hmm
+
+[37/143] bla_Bc_2 (NF033095.1): 35 sequences
+    Alignment staged: ncbi_hmms/bla_Bc_2.aln.fa
+    HMM written: ncbi_hmms/bla_Bc_2.hmm
+
+[38/143] OKP-A (NF052571.1): 35 sequences
+    Alignment staged: ncbi_hmms/OKP-A.aln.fa
+    HMM written: ncbi_hmms/OKP-A.hmm
+
+[39/143] Erm23S_rRNA_broad (NF000499.2): 34 sequences
+    Alignment staged: ncbi_hmms/Erm23S_rRNA_broad.aln.fa
+    HMM written: ncbi_hmms/Erm23S_rRNA_broad.hmm
+
+[40/143] fosBx1_fam (NF041541.1): 34 sequences
+    Alignment staged: ncbi_hmms/fosBx1_fam.aln.fa
+    HMM written: ncbi_hmms/fosBx1_fam.hmm
+
+[41/143] ANT_6_aadS (NF033387.1): 32 sequences
+    Alignment staged: ncbi_hmms/ANT_6_aadS.aln.fa
+    HMM written: ncbi_hmms/ANT_6_aadS.hmm
+
+[42/143] ANT_3pp_Ic (NF053581.1): 32 sequences
+    Alignment staged: ncbi_hmms/ANT_3pp_Ic.aln.fa
+    HMM written: ncbi_hmms/ANT_3pp_Ic.hmm
+
+[43/143] B1_blaCHM (NF041758.1): 30 sequences
+    Alignment staged: ncbi_hmms/B1_blaCHM.aln.fa
+    HMM written: ncbi_hmms/B1_blaCHM.hmm
+
+[44/143] ABCF_VgaF (NF045691.1): 30 sequences
+    Alignment staged: ncbi_hmms/ABCF_VgaF.aln.fa
+    HMM written: ncbi_hmms/ABCF_VgaF.hmm
+
+[45/143] blaL1 (NF033106.1): 29 sequences
+    Alignment staged: ncbi_hmms/blaL1.aln.fa
+    HMM written: ncbi_hmms/blaL1.hmm
+
+[46/143] vanW-gen (NF033128.2): 29 sequences
+    Alignment staged: ncbi_hmms/vanW-gen.aln.fa
+    HMM written: ncbi_hmms/vanW-gen.hmm
+
+[47/143] blaIMP (NF012147.1): 27 sequences
+    Alignment staged: ncbi_hmms/blaIMP.aln.fa
+    HMM written: ncbi_hmms/blaIMP.hmm
+
+[48/143] AAC_6p_Strep (NF000225.3): 26 sequences
+    Alignment staged: ncbi_hmms/AAC_6p_Strep.aln.fa
+    HMM written: ncbi_hmms/AAC_6p_Strep.hmm
+
+[49/143] blaOXA-213_like (NF000269.2): 26 sequences
+    Alignment staged: ncbi_hmms/blaOXA-213_like.aln.fa
+    HMM written: ncbi_hmms/blaOXA-213_like.hmm
+
+[50/143] AAC_3_II (NF033080.0): 26 sequences
+    Alignment staged: ncbi_hmms/AAC_3_II.aln.fa
+    HMM written: ncbi_hmms/AAC_3_II.hmm
+
+[51/143] blaELC (NF050047.1): 26 sequences
+    Alignment staged: ncbi_hmms/blaELC.aln.fa
+    HMM written: ncbi_hmms/blaELC.hmm
+
+[52/143] vanR_ACDEGLN (NF033117.2): 25 sequences
+    Alignment staged: ncbi_hmms/vanR_ACDEGLN.aln.fa
+    HMM written: ncbi_hmms/vanR_ACDEGLN.hmm
+
+[53/143] class_D_Cupria (NF041812.1): 25 sequences
+    Alignment staged: ncbi_hmms/class_D_Cupria.aln.fa
+    HMM written: ncbi_hmms/class_D_Cupria.hmm
+
+[54/143] tet_MFS_A_B_C_D (NF012174.0): 23 sequences
+    Alignment staged: ncbi_hmms/tet_MFS_A_B_C_D.aln.fa
+    HMM written: ncbi_hmms/tet_MFS_A_B_C_D.hmm
+
+[55/143] 47473_otr (NF000120.3): 22 sequences
+    Alignment staged: ncbi_hmms/47473_otr.aln.fa
+    HMM written: ncbi_hmms/47473_otr.hmm
+
+[56/143] blaDIM_SIM_IMP (NF012145.1): 22 sequences
+    Alignment staged: ncbi_hmms/blaDIM_SIM_IMP.aln.fa
+    HMM written: ncbi_hmms/blaDIM_SIM_IMP.hmm
+
+[57/143] ANT_3pp_I (NF012157.0): 22 sequences
+    Alignment staged: ncbi_hmms/ANT_3pp_I.aln.fa
+    HMM written: ncbi_hmms/ANT_3pp_I.hmm
+
+[58/143] blaAHM (NF049846.1): 22 sequences
+    Alignment staged: ncbi_hmms/blaAHM.aln.fa
+    HMM written: ncbi_hmms/blaAHM.hmm
+
+[59/143] ANT_4p_I (NF033061.1): 21 sequences
+    Alignment staged: ncbi_hmms/ANT_4p_I.aln.fa
+    HMM written: ncbi_hmms/ANT_4p_I.hmm
+
+[60/143] blaCSA (NF033698.1): 21 sequences
+    Alignment staged: ncbi_hmms/blaCSA.aln.fa
+    HMM written: ncbi_hmms/blaCSA.hmm
+
+[61/143] tet_MFS_30 (NF045486.1): 21 sequences
+    Alignment staged: ncbi_hmms/tet_MFS_30.aln.fa
+    HMM written: ncbi_hmms/tet_MFS_30.hmm
+
+[62/143] AAC_6p_Serra (NF000021.4): 20 sequences
+    Alignment staged: ncbi_hmms/AAC_6p_Serra.aln.fa
+    HMM written: ncbi_hmms/AAC_6p_Serra.hmm
+
+[63/143] penta_rpt_QnrB (NF000420.1): 20 sequences
+    Alignment staged: ncbi_hmms/penta_rpt_QnrB.aln.fa
+    HMM written: ncbi_hmms/penta_rpt_QnrB.hmm
+
+[64/143] ampC_Kaer (NF041662.1): 20 sequences
+    Alignment staged: ncbi_hmms/ampC_Kaer.aln.fa
+    HMM written: ncbi_hmms/ampC_Kaer.hmm
+
+[65/143] blaPEN-Bcc (NF000320.3): 19 sequences
+    Alignment staged: ncbi_hmms/blaPEN-Bcc.aln.fa
+    HMM written: ncbi_hmms/blaPEN-Bcc.hmm
+
+[66/143] mac_hydro_EstT (NF041759.1): 19 sequences
+    Alignment staged: ncbi_hmms/mac_hydro_EstT.aln.fa
+    HMM written: ncbi_hmms/mac_hydro_EstT.hmm
+
+[67/143] AAC_6p_group_E (NF043067.1): 19 sequences
+    Alignment staged: ncbi_hmms/AAC_6p_group_E.aln.fa
+    HMM written: ncbi_hmms/AAC_6p_group_E.hmm
+
+[68/143] OKP-B (NF051479.1): 19 sequences
+    Alignment staged: ncbi_hmms/OKP-B.aln.fa
+    HMM written: ncbi_hmms/OKP-B.hmm
+
+[69/143] bla-A_Chryseo (NF000447.2): 18 sequences
+    Alignment staged: ncbi_hmms/bla-A_Chryseo.aln.fa
+    HMM written: ncbi_hmms/bla-A_Chryseo.hmm
+
+[70/143] blaGES (NF012103.0): 18 sequences
+    Alignment staged: ncbi_hmms/blaGES.aln.fa
+    HMM written: ncbi_hmms/blaGES.hmm
+
+[71/143] blaBJP (NF012140.0): 18 sequences
+    Alignment staged: ncbi_hmms/blaBJP.aln.fa
+    HMM written: ncbi_hmms/blaBJP.hmm
+
+[72/143] blaB-IND-MUS (NF012146.1): 18 sequences
+    Alignment staged: ncbi_hmms/blaB-IND-MUS.aln.fa
+    HMM written: ncbi_hmms/blaB-IND-MUS.hmm
+
+[73/143] blaOXA-VL06 (NF040784.1): 18 sequences
+    Alignment staged: ncbi_hmms/blaOXA-VL06.aln.fa
+    HMM written: ncbi_hmms/blaOXA-VL06.hmm
+
+[74/143] chloram_CatA (NF000491.1): 17 sequences
+    Alignment staged: ncbi_hmms/chloram_CatA.aln.fa
+    HMM written: ncbi_hmms/chloram_CatA.hmm
+
+[75/143] Fos_GSH (NF000496.2): 17 sequences
+    Alignment staged: ncbi_hmms/Fos_GSH.aln.fa
+    HMM written: ncbi_hmms/Fos_GSH.hmm
+
+[76/143] vanR_FM (NF033120.0): 17 sequences
+    Alignment staged: ncbi_hmms/vanR_FM.aln.fa
+    HMM written: ncbi_hmms/vanR_FM.hmm
+
+[77/143] rifampin_ARR (NF033144.1): 17 sequences
+    Alignment staged: ncbi_hmms/rifampin_ARR.aln.fa
+    HMM written: ncbi_hmms/rifampin_ARR.hmm
+
+[78/143] blaPenB (NF041138.1): 17 sequences
+    Alignment staged: ncbi_hmms/blaPenB.aln.fa
+    HMM written: ncbi_hmms/blaPenB.hmm
+
+[79/143] blaCESS (NF050797.1): 17 sequences
+    Alignment staged: ncbi_hmms/blaCESS.aln.fa
+    HMM written: ncbi_hmms/blaCESS.hmm
+
+[80/143] esterase_mleBCA (NF053684.1): 17 sequences
+    Alignment staged: ncbi_hmms/esterase_mleBCA.aln.fa
+    HMM written: ncbi_hmms/esterase_mleBCA.hmm
+
+[81/143] AAC_6p_Acine (NF000224.3): 16 sequences
+    Alignment staged: ncbi_hmms/AAC_6p_Acine.aln.fa
+    HMM written: ncbi_hmms/AAC_6p_Acine.hmm
+
+[82/143] NshR_TsnR (NF000477.1): 16 sequences
+    Alignment staged: ncbi_hmms/NshR_TsnR.aln.fa
+    HMM written: ncbi_hmms/NshR_TsnR.hmm
+
+[83/143] APH_3p_I (NF033059.2): 16 sequences
+    Alignment staged: ncbi_hmms/APH_3p_I.aln.fa
+    HMM written: ncbi_hmms/APH_3p_I.hmm
+
+[84/143] bla1 (NF033096.2): 16 sequences
+    Alignment staged: ncbi_hmms/bla1.aln.fa
+    HMM written: ncbi_hmms/bla1.hmm
+
+[85/143] tet_protect_M_W (NF033148.1): 16 sequences
+    Alignment staged: ncbi_hmms/tet_protect_M_W.aln.fa
+    HMM written: ncbi_hmms/tet_protect_M_W.hmm
+
+[86/143] AAC_2p_IIb (NF033472.1): 16 sequences
+    Alignment staged: ncbi_hmms/AAC_2p_IIb.aln.fa
+    HMM written: ncbi_hmms/AAC_2p_IIb.hmm
+
+[87/143] blaPenA (NF041143.1): 16 sequences
+    Alignment staged: ncbi_hmms/blaPenA.aln.fa
+    HMM written: ncbi_hmms/blaPenA.hmm
+
+[88/143] blaOXA-2_like (NF000267.2): 15 sequences
+    Alignment staged: ncbi_hmms/blaOXA-2_like.aln.fa
+    HMM written: ncbi_hmms/blaOXA-2_like.hmm
+
+[89/143] self_FomB_kinase (NF000361.1): 15 sequences
+    Alignment staged: ncbi_hmms/self_FomB_kinase.aln.fa
+    HMM written: ncbi_hmms/self_FomB_kinase.hmm
+
+[90/143] blaPNC (NF045671.1): 15 sequences
+    Alignment staged: ncbi_hmms/blaPNC.aln.fa
+    HMM written: ncbi_hmms/blaPNC.hmm
+
+[91/143] blaASDC (NF047361.1): 15 sequences
+    Alignment staged: ncbi_hmms/blaASDC.aln.fa
+    HMM written: ncbi_hmms/blaASDC.hmm
+
+[92/143] blaCOR_B1 (NF047974.1): 15 sequences
+    Alignment staged: ncbi_hmms/blaCOR_B1.aln.fa
+    HMM written: ncbi_hmms/blaCOR_B1.hmm
+
+[93/143] ABCF_Sal (NF000169.2): 14 sequences
+    Alignment staged: ncbi_hmms/ABCF_Sal.aln.fa
+    HMM written: ncbi_hmms/ABCF_Sal.hmm
+
+[94/143] fosM_gen (NF038306.1): 14 sequences
+    Alignment staged: ncbi_hmms/fosM_gen.aln.fa
+    HMM written: ncbi_hmms/fosM_gen.hmm
+
+[95/143] bla_B1_long (NF041269.1): 14 sequences
+    Alignment staged: ncbi_hmms/bla_B1_long.aln.fa
+    HMM written: ncbi_hmms/bla_B1_long.hmm
+
+[96/143] APH_3p_Ia (NF051474.1): 14 sequences
+    Alignment staged: ncbi_hmms/APH_3p_Ia.aln.fa
+    HMM written: ncbi_hmms/APH_3p_Ia.hmm
+
+[97/143] vanH_gen (NF000492.1): 13 sequences
+    Alignment staged: ncbi_hmms/vanH_gen.aln.fa
+    HMM written: ncbi_hmms/vanH_gen.hmm
+
+[98/143] SubclassA2 (NF012099.1): 13 sequences
+    Alignment staged: ncbi_hmms/SubclassA2.aln.fa
+    HMM written: ncbi_hmms/SubclassA2.hmm
+
+[99/143] AAC_3_IV (NF033081.0): 13 sequences
+    Alignment staged: ncbi_hmms/AAC_3_IV.aln.fa
+    HMM written: ncbi_hmms/AAC_3_IV.hmm
+
+[100/143] APH_6_Ic_gen (NF033614.1): 13 sequences
+    Alignment staged: ncbi_hmms/APH_6_Ic_gen.aln.fa
+    HMM written: ncbi_hmms/APH_6_Ic_gen.hmm
+
+[101/143] blaOXA-12_like (NF033702.0): 13 sequences
+    Alignment staged: ncbi_hmms/blaOXA-12_like.aln.fa
+    HMM written: ncbi_hmms/blaOXA-12_like.hmm
+
+[102/143] blaSED_CdiA_fam (NF049858.1): 13 sequences
+    Alignment staged: ncbi_hmms/blaSED_CdiA_fam.aln.fa
+    HMM written: ncbi_hmms/blaSED_CdiA_fam.hmm
+
+[103/143] beta_lac_CdiA (NF049885.1): 13 sequences
+    Alignment staged: ncbi_hmms/beta_lac_CdiA.aln.fa
+    HMM written: ncbi_hmms/beta_lac_CdiA.hmm
+
+[104/143] FosA (NF000221.4): 12 sequences
+    Alignment staged: ncbi_hmms/FosA.aln.fa
+    HMM written: ncbi_hmms/FosA.hmm
+
+[105/143] MECA_PBP2A (NF000237.1): 12 sequences
+    Alignment staged: ncbi_hmms/MECA_PBP2A.aln.fa
+    HMM written: ncbi_hmms/MECA_PBP2A.hmm
+
+[106/143] macrolide_MphB (NF000242.2): 12 sequences
+    Alignment staged: ncbi_hmms/macrolide_MphB.aln.fa
+    HMM written: ncbi_hmms/macrolide_MphB.hmm
+
+[107/143] blaR1_generic (NF000326.1): 12 sequences
+    Alignment staged: ncbi_hmms/blaR1_generic.aln.fa
+    HMM written: ncbi_hmms/blaR1_generic.hmm
+
+[108/143] fosA7 (NF032892.0): 12 sequences
+    Alignment staged: ncbi_hmms/fosA7.aln.fa
+    HMM written: ncbi_hmms/fosA7.hmm
+
+[109/143] AAC_6p_Ib (NF033074.0): 12 sequences
+    Alignment staged: ncbi_hmms/AAC_6p_Ib.aln.fa
+    HMM written: ncbi_hmms/AAC_6p_Ib.hmm
+
+[110/143] HK_VanS_ACDEFG (NF033091.0): 12 sequences
+    Alignment staged: ncbi_hmms/HK_VanS_ACDEFG.aln.fa
+    HMM written: ncbi_hmms/HK_VanS_ACDEFG.hmm
+
+[111/143] sensor_BlaR1 (NF033108.1): 12 sequences
+    Alignment staged: ncbi_hmms/sensor_BlaR1.aln.fa
+    HMM written: ncbi_hmms/sensor_BlaR1.hmm
+
+[112/143] polymyxin_MCR3 (NF033408.5): 12 sequences
+    Alignment staged: ncbi_hmms/polymyxin_MCR3.aln.fa
+    HMM written: ncbi_hmms/polymyxin_MCR3.hmm
+
+[113/143] blaPRC (NF038359.1): 12 sequences
+    Alignment staged: ncbi_hmms/blaPRC.aln.fa
+    HMM written: ncbi_hmms/blaPRC.hmm
+
+[114/143] APH_9_Ia (NF000052.4): 11 sequences
+    Alignment staged: ncbi_hmms/APH_9_Ia.aln.fa
+    HMM written: ncbi_hmms/APH_9_Ia.hmm
+
+[115/143] CMY2 (NF000191.1): 11 sequences
+    Alignment staged: ncbi_hmms/CMY2.aln.fa
+    HMM written: ncbi_hmms/CMY2.hmm
+
+[116/143] D_ala_D_lac (NF000206.1): 11 sequences
+    Alignment staged: ncbi_hmms/D_ala_D_lac.aln.fa
+    HMM written: ncbi_hmms/D_ala_D_lac.hmm
+
+[117/143] blaPLA_ORN_TER (NF000275.2): 11 sequences
+    Alignment staged: ncbi_hmms/blaPLA_ORN_TER.aln.fa
+    HMM written: ncbi_hmms/blaPLA_ORN_TER.hmm
+
+[118/143] blaFONA (NF000323.2): 11 sequences
+    Alignment staged: ncbi_hmms/blaFONA.aln.fa
+    HMM written: ncbi_hmms/blaFONA.hmm
+
+[119/143] trim_DfrA1_like (NF000330.1): 11 sequences
+    Alignment staged: ncbi_hmms/trim_DfrA1_like.aln.fa
+    HMM written: ncbi_hmms/trim_DfrA1_like.hmm
+
+[120/143] bla-B1-FLAV (NF000450.2): 11 sequences
+    Alignment staged: ncbi_hmms/bla-B1-FLAV.aln.fa
+    HMM written: ncbi_hmms/bla-B1-FLAV.hmm
+
+[121/143] tet_protect_Q (NF012154.0): 11 sequences
+    Alignment staged: ncbi_hmms/tet_protect_Q.aln.fa
+    HMM written: ncbi_hmms/tet_protect_Q.hmm
+
+[122/143] blaCTX-M (NF033089.1): 11 sequences
+    Alignment staged: ncbi_hmms/blaCTX-M.aln.fa
+    HMM written: ncbi_hmms/blaCTX-M.hmm
+
+[123/143] garosamine_AAA (NF038208.1): 11 sequences
+    Alignment staged: ncbi_hmms/garosamine_AAA.aln.fa
+    HMM written: ncbi_hmms/garosamine_AAA.hmm
+
+[124/143] blaAMZ (NF041741.1): 11 sequences
+    Alignment staged: ncbi_hmms/blaAMZ.aln.fa
+    HMM written: ncbi_hmms/blaAMZ.hmm
+
+[125/143] ANT_9_Ic (NF045909.1): 11 sequences
+    Alignment staged: ncbi_hmms/ANT_9_Ic.aln.fa
+    HMM written: ncbi_hmms/ANT_9_Ic.hmm
+
+[126/143] AAC_6p_Entco (NF000165.3): 10 sequences
+    Alignment staged: ncbi_hmms/AAC_6p_Entco.aln.fa
+    HMM written: ncbi_hmms/AAC_6p_Entco.hmm
+
+[127/143] sat4 (NF000360.1): 10 sequences
+    Alignment staged: ncbi_hmms/sat4.aln.fa
+    HMM written: ncbi_hmms/sat4.hmm
+
+[128/143] blaIMI (NF000400.3): 10 sequences
+    Alignment staged: ncbi_hmms/blaIMI.aln.fa
+    HMM written: ncbi_hmms/blaIMI.hmm
+
+[129/143] CfrAB (NF000424.4): 10 sequences
+    Alignment staged: ncbi_hmms/CfrAB.aln.fa
+    HMM written: ncbi_hmms/CfrAB.hmm
+
+[130/143] blaCAU (NF000427.2): 10 sequences
+    Alignment staged: ncbi_hmms/blaCAU.aln.fa
+    HMM written: ncbi_hmms/blaCAU.hmm
+
+[131/143] blaVIM (NF012100.0): 10 sequences
+    Alignment staged: ncbi_hmms/blaVIM.aln.fa
+    HMM written: ncbi_hmms/blaVIM.hmm
+
+[132/143] erm_B_23S_MT (NF012220.1): 10 sequences
+    Alignment staged: ncbi_hmms/erm_B_23S_MT.aln.fa
+    HMM written: ncbi_hmms/erm_B_23S_MT.hmm
+
+[133/143] blaB (NF033107.1): 10 sequences
+    Alignment staged: ncbi_hmms/blaB.aln.fa
+    HMM written: ncbi_hmms/blaB.hmm
+
+[134/143] sensor_MecR1 (NF033109.1): 10 sequences
+    Alignment staged: ncbi_hmms/sensor_MecR1.aln.fa
+    HMM written: ncbi_hmms/sensor_MecR1.hmm
+
+[135/143] ANT_3pp_AadA1 (NF033126.1): 10 sequences
+    Alignment staged: ncbi_hmms/ANT_3pp_AadA1.aln.fa
+    HMM written: ncbi_hmms/ANT_3pp_AadA1.hmm
+
+[136/143] poly_MCR3_broad (NF033409.0): 10 sequences
+    Alignment staged: ncbi_hmms/poly_MCR3_broad.aln.fa
+    HMM written: ncbi_hmms/poly_MCR3_broad.hmm
+
+[137/143] fosA8 (NF033933.0): 10 sequences
+    Alignment staged: ncbi_hmms/fosA8.aln.fa
+    HMM written: ncbi_hmms/fosA8.hmm
+
+[138/143] B3_blaSPR (NF041137.2): 10 sequences
+    Alignment staged: ncbi_hmms/B3_blaSPR.aln.fa
+    HMM written: ncbi_hmms/B3_blaSPR.hmm
+
+[139/143] Erm46 (NF042988.1): 10 sequences
+    Alignment staged: ncbi_hmms/Erm46.aln.fa
+    HMM written: ncbi_hmms/Erm46.hmm
+
+[140/143] blaOXA-1327_like (NF047782.1): 10 sequences
+    Alignment staged: ncbi_hmms/blaOXA-1327_like.aln.fa
+    HMM written: ncbi_hmms/blaOXA-1327_like.hmm
+
+[141/143] 16S_A1408_WarA (NF051863.1): 10 sequences
+    Alignment staged: ncbi_hmms/16S_A1408_WarA.aln.fa
+    HMM written: ncbi_hmms/16S_A1408_WarA.hmm
+
+[142/143] esterase_mleBRB (NF053683.1): 10 sequences
+    Alignment staged: ncbi_hmms/esterase_mleBRB.aln.fa
+    HMM written: ncbi_hmms/esterase_mleBRB.hmm
+
+[143/143] FosA12 (NF053877.1): 10 sequences
+    Alignment staged: ncbi_hmms/FosA12.aln.fa
+    HMM written: ncbi_hmms/FosA12.hmm
+
+Manifest written: ncbi_hmms/manifest.tsv (143 models)
+
+Concatenating 143 HMMs into ncbi_hmms/ncbi_amr_families.hmm ...
+Running hmmpress ...
+  Indexed: ncbi_hmms/ncbi_amr_families.hmm.h3f, .h3i, .h3m, .h3p
+
+Building BATH HMM database ncbi_hmms/ncbi_amr_families.bhmm ...
+  BATH HMMs: ncbi_hmms/ncbi_amr_families.bhmm
+
+Building MMseqs2 DB ncbi_hmms/ncbi_amr_refDB with mmseqs ...
+  MMseqs2 DB: ncbi_hmms/ncbi_amr_refDB
+
+Done. 143 models in ncbi_hmms/ncbi_amr_families.hmm
+
+Example searches:
+  # hmmsearch (translate metagenomic reads to protein first):
+    hmmsearch -E 0.01 ncbi_hmms/ncbi_amr_families.hmm protein_reads.faa
+  # BATH (directly on DNA with frameshift-aware alignment):
+    bathsearch --fs --cpu 16 ncbi_hmms/ncbi_amr_families.bhmm genome_reads.fna
+  # DUMMER (via run_hmmer.py --dummer):
+    python run_hmmer.py genome.fa --dummer --hmmdb ncbi_hmms/ncbi_amr_families.hmm --dummer-msa ncbi_hmms/ncbi_amr_families.msa --dummer-bin /mnt/tmp/seq-position-probs/bin/dummer

@@ -1,0 +1,37 @@
+[22:12:06] === NCBI HMM preparation: outdir=ncbi_hmms min_seqs=10 ===
+[22:12:06] --- Stage 1: downloads -> ./ncbi_source ---
+[22:12:06]   present, skipping: ./ncbi_source/NCBIfam-AMRFinder.tsv
+[22:12:06]   present, skipping: ./ncbi_source/hmm_PGAP.tsv
+[22:12:06]   present, skipping: ./ncbi_source/NCBIfam-AMRFinder.SEED.tar.gz
+[22:12:06] --- Stage 2: extract SEED tarball ---
+[22:12:06]   SEED dir populated (784 files), skipping
+[22:12:06] --- Stage 3: filter audit (min 10 sequences, core AMR only) ---
+core-AMR models in table : 697
+kept (>=10 seqs)      : 143
+removed (too few)        : 551
+missing (drift)          : 3
+  MISSING NF058698.1 blaGUA: no PGAP label
+  MISSING NF058701.1 blaBAS: no PGAP label
+  MISSING NF058748.1 blaACES: no PGAP label
+class balance of kept models:
+  BETA-LACTAM                              66
+  AMINOGLYCOSIDE                           26
+  GLYCOPEPTIDE                             9
+  FOSFOMYCIN                               9
+  MACROLIDE                                9
+  TETRACYCLINE                             6
+  PHENICOL                                 4
+  LINCOSAMIDE/MACROLIDE/STREPTOGRAMIN      3
+  TRIMETHOPRIM                             2
+  RIFAMYCIN                                2
+  COLISTIN                                 2
+  LINCOSAMIDE/PLEUROMUTILIN/STREPTOGRAMIN  1
+  STREPTOTHRICIN                           1
+  QUINOLONE                                1
+  THIOSTREPTON                             1
+  LINCOSAMIDE                              1
+wrote ncbi_hmms.kept_models.tsv
+[22:12:06] --- Stage 4: build HMMs -> ncbi_hmms ---
+[22:12:06]   running build_ncbi_hmms.py (see ncbi_hmms/build.log for per-model progress)
+[22:12:27] === done ===
+[22:12:27] outputs: ncbi_hmms/ncbi_amr_families.{hmm,msa,bhmm} ncbi_hmms/ncbi_amr_refDB* ncbi_hmms/manifest.tsv

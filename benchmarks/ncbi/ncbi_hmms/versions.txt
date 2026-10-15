@@ -1,0 +1,4 @@
+db_version=2026-08-07.1
+min_seqs=10
+built=2026-09-14T14:12:27Z
+models=143

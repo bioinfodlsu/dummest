@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Editors / OS
+*~
+*.swp
+.DS_Store
+
+# Local settings
+config.sh

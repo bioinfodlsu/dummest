@@ -1,0 +1,119 @@
+#! /usr/bin/perl 
+
+# Run a transmark benchmark with last.
+#
+# Usage:      x-last <execdir> <scriptdir> <outdir> <outname> <queryfile> <posfile> <fafile> <cpus> <e-max>
+# Example:  /home/user/BATH-paper/transmark/x-last /home/user/last/bin /home/user/BATH-paper/transmark  /home/user/transmark-results/last  transmark-00fs /home/user/transmark-files/transmark-00fs.seq /home/user/transmark-files/transmark-00fs.pos /home/user/transmark-files/transmark-00fs.fa 16 100
+#
+
+use Time::HiRes;
+
+$usage = "Usage: $0 \n\t<execdir>\n\t<scriptdir>\n\t<outdir>\n\t<outname>\n\t<queryfile>\n\t<posfile>\n\t<targetfile>\n\t<cpus>\n\t<e-max>\n\t[extra-flags]\n";
+if(scalar(@ARGV) < 9) { printf("$usage\n$options_usage"); exit(1); }
+
+($execdir, $scriptdir, $outdir, $outname, $queryfile, $posfile, $targetfile, $cpus, $emax, @extra_flags_list) = @ARGV;
+$extra_flags = join(" ", @extra_flags_list);
+$outfile        = $outname . ".out";
+$tmpoutfile     = $outfile . ".tmp";
+$sorttmpoutfile = $outfile . ".tmp.sort";
+
+$idscript   = "$scriptdir/transmark-idpositives.pl";
+# $lastal     = "$execdir/dummer";
+$lastal     = "python3 $execdir/dummest";
+#$lastal     = "python3 $execdir/dummest";
+
+if (! -d $execdir)                                      { die "didn't find executable directory $execdir"; }
+if (! -d $scriptdir)                                    { die "didn't find script directory $scriptdir"; }
+#if (! -x $lastal)                                       { die "didn't find executable $lastal"; }
+if (! -e $outdir)                                       { die "$outdir doesn't exist"; }
+if (! -e $posfile)                                      { die "$posfile doesn't exist"; }
+if (! -e $idscript)                                     { die "positive identification script $idscript doesn't exist"; }
+
+open(TMPOUTFILE,">$outdir/$tmpoutfile") || die "failed to open $tmpoutfile";
+
+$runtime = -1 * Time::HiRes::time();
+
+# run last (dummer via dummest; MMseqs DBs are rebuilt per-run in a
+# tmpdir by dummest itself -- step2 no longer prebuilds them)
+# Derive the per-variant MSA name from the query HMM (<base>.AA.hmm),
+# so full and lite benchmarks can coexist.
+$qbase = $queryfile;
+$qbase =~ s/\.AA\.hmm$//;
+$command = "$lastal $queryfile $qbase.AA.msa $targetfile $cpus $extra_flags > $outdir/$outname.tmp";
+$status = system("$command");
+if ($status != 0) { die "FAILED: $command"; }
+
+$runtime += Time::HiRes::time();
+
+open(OUTPUT, "$outdir/$outname.tmp") || die "FAILED: to open $outdir/$outname.tmp tabular output file"; 
+
+my $query;
+
+my ($bitscore, $evalue, $query, $target, $target_from, $target_to, $frameshifts);
+my $s_line_count = 0;
+while (<OUTPUT>) {
+    chomp;
+
+    # Skip header/comment lines and empty lines
+    if (/^\#/ || /^\s*$/) { next; }
+
+    # "a" lines start a new alignment block and contain the Score and E-value
+    if (/^a\s+/) {
+        $s_line_count = 0;
+        $frameshifts = 0; # Reset for new block
+
+        if (/score=([\d\.]+)/) { $bitscore = $1; }
+        if (/E=([^\s]+)/)      { $evalue = $1; }
+    }
+
+    # "s" lines contain the sequence data and coordinates
+    elsif (/^s\s+/) {
+        $s_line_count++;
+        my @fields = split(/\s+/, $_);
+
+        # The first 's' line is the Query
+        if ($s_line_count == 1) {
+            my $raw_query = $fields[1];
+            my @query_parts = split(/\./, $raw_query);
+            # Safely handle names with or without a dot
+            $query = defined($query_parts[1]) ? $query_parts[1] : $query_parts[0];
+        }
+
+        # The second 's' line is the Target
+        elsif ($s_line_count == 2) {
+            $target         = $fields[1];
+            my $t_start     = $fields[2]; # 0-based start
+            my $t_aln_len   = $fields[3]; # alignment length
+            my $t_strand    = $fields[4]; # strand (+ or -)
+            my $t_seq_len   = $fields[5]; # total sequence length
+
+            # Coordinate translation mapping exactly to your original logic
+            if ($t_strand eq '+') {
+                $target_from = $t_start + 1;
+                $target_to   = $target_from + $t_aln_len - 1;
+            } else {
+                $target_from = $t_seq_len - $t_start;
+                $target_to   = $target_from - $t_aln_len + 1;
+            }
+
+            # Print to the temp file now that we have all the data for this block
+            printf TMPOUTFILE "%10g %10.1f %10d %10d %20s %35s %5d\n",
+                   $evalue, $bitscore, $target_from, $target_to, $target, $query, $frameshifts;
+        }
+    }
+}
+
+open(TIME, ">" . "$outdir/$outname.time");
+printf TIME ("$outname %.2f seconds\n", $runtime);    
+close(TIME);
+
+close TMPOUTFILE;
+
+$command = "sort -g $outdir/$tmpoutfile > $outdir/$sorttmpoutfile";
+$status = system("$command");
+if ($status != 0) { die "FAILED: $command"; }
+
+$command = "perl $idscript $posfile $outdir/$sorttmpoutfile > $outdir/$outfile";
+$status = system("$command");
+if ($status != 0) { die "FAILED: $command"; }
+ 

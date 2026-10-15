@@ -1,0 +1,85 @@
+#! /usr/bin/perl 
+
+# Run a transmark benchmark with MMSeqs.
+#
+# Usage:      x-mmesqs <execdir> <scriptdir> <outdir> <outname> <queryfile> <posfile> <fafile> <cpus> <e-max>
+# Example:  /home/user/BATH-paper/transmark/x-mmseqs /home/user/MMseqs2/build/src/mmseqs /home/user/BATH-paper/transmark  /home/user/transmark-results  transmark-00fs /home/user/transmark-files/transmark-00fs.mm_db /home/user/transmark-files/transmark-00fs.pos /home/user/transmark-files/transmark-00fs.mm_db 16 100
+#
+
+use Time::HiRes;
+
+$usage = "Usage: $0 \n\t<execdir>\n\t<scriptdir>\n\t<outdir>\n\t<outname>\n\t<queryfile>\n\t<posfile>\n\t<targetfile>\n\t<cpus>\n\t<e-max>\n"; 
+if(scalar(@ARGV) != 9) { printf("$usage\n$options_usage"); exit(1); }
+
+($execdir, $scriptdir, $outdir, $outname, $queryfile, $posfile, $targetfile, $cpus, $emax) = @ARGV;
+$outfile        = $outname . ".out";
+$tmpoutfile     = $outfile . ".tmp";
+$sorttmpoutfile = $outfile . ".tmp.sort";
+$tmpdir         = $outname . "-tmpdir";
+
+$idscript   = "$scriptdir/transmark-idpositives.pl";
+$mmseqs    = "$execdir/mmseqs";
+
+if (! -d $execdir)                                      { die "didn't find executable directory $execdir"; }
+if (! -d $scriptdir)                                    { die "didn't find script directory $scriptdir"; }
+if (! -e $mmseqs)                                       { die "$mmseqs does not exist"; }
+if (! -e $outdir)                                       { die "$outdir doesn't exist"; }
+if (! -e $posfile)                                      { die "$posfile doesn't exist"; }
+if (! -e $idscript)                                     { die "positive identification script $idscript doesn't exist"; }
+
+open(TMPOUTFILE,">$outdir/$tmpoutfile") || die "failed to open $outdir/$tmpoutfile";
+
+
+# create tmp dir
+$command = "mkdir $outdir/$tmpdir";
+$status = system("$command");
+if ($status != 0) { die "FAILED: $command"; }
+
+$runtime = -1 * Time::HiRes::time();
+
+# run MMseqs
+$command = "$mmseqs search $targetfile $queryfile $outdir/$outname.ali  $outdir/$tmpdir --threads $cpus -e $emax";
+$status = system("$command");
+if ($status != 0) { die "FAILED: $command"; }
+
+$runtime += Time::HiRes::time();
+
+# covert MMseqs output
+$command = "$mmseqs convertalis  $targetfile  $queryfile $outdir/$outname.ali $outdir/$outname.tmp >> $outdir/$outname.search";
+$status = system("$command");
+if ($status != 0) { die "FAILED: $command"; }
+
+# remove tmp dir
+$command = "rm -r $outdir/$tmpdir";
+$status = system("$command");
+if ($status != 0) { die "FAILED: $command"; }
+
+open(OUTPUT, "$outdir/$outname.tmp") || die "FAILED: to open $outdirdir/$outname.tmp tabular output file";
+while (<OUTPUT>)
+{
+    if (/^\#/) { next; }
+    @fields   = split(' ', $_, 12);
+    $query       = (split('\.', $fields[1]))[1];
+    $target      = $fields[0];
+    $target_from = $fields[6];
+    $target_to   = $fields[7];
+    $bitscore    = $fields[11];
+    $evalue        = $fields[10];
+    printf TMPOUTFILE "%10g %10.1f %10d %10d %20s %35s\n", $evalue, $bitscore, $target_from, $target_to, $target, $query;
+}
+
+open(TIME, ">" . "$outdir/$outname.time");
+printf TIME ("$outname %.2f seconds\n", $runtime);    
+close(TIME);
+
+close OUTPUT;
+close TMPOUTFILE;
+
+# Use 'transmark-idpositives.pl' to identify positives in the temporary output file to
+# create the permanent output file. First, we need to sort by score.
+$command = "sort -g $outdir/$tmpoutfile > $outdir/$sorttmpoutfile";
+$status = system("$command");
+if ($status != 0) { die "FAILED: $command"; }
+
+$command = "perl $idscript $posfile $outdir/$sorttmpoutfile > $outdir/$outfile";
+$status = system("$command");

@@ -1,0 +1,5 @@
+#! /usr/bin/perl
+# Deprecated alias: use x-bathsearch-no-fs instead.
+use FindBin;
+warn "x-bathsearch-nofs is deprecated, use x-bathsearch-no-fs instead\n";
+exec("$FindBin::Bin/x-bathsearch-no-fs", @ARGV) or die "exec failed: $!";
