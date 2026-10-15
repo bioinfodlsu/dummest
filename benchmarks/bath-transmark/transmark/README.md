@@ -18,7 +18,10 @@ This directory includes:
 Optional frameshift-read simulation requires an upstream Badread clone (https://github.com/rrwick/Badread) for its badread-runner.py, plus the Python packages `badread` and `edlib`. Point the BADREAD_DIR environment variable at the clone if it is not in the default location.
 
 This directory DOES NOT include the following:
-1. A protein sequence dataset from which to create decoy sequences for the benchmark.  We recommend using PFAM seed alignments available at: https://www.ebi.ac.uk/interpro/download/Pfam/
+1. A protein sequence dataset from which to create decoy sequences for the benchmark.  We used Pfam 38.1 seed alignments (Pfam-A.seed, 27,481 families, released 01/2026).  To reproduce this benchmark, download the versioned file:
+   https://ftp.ebi.ac.uk/pub/databases/Pfam/releases/Pfam38.1/Pfam-A.seed.gz
+   The release's md5_checksums file lists md5 ec8eb9b0d224f74f1d841672e5b7a1fc for Pfam-A.seed.gz; after gunzip the seed should be 592,631,194 bytes with sha256 2423041a02b9fcfb8f4afa50a2e3c4572a6223660a4339387041f516031f5156.
+   Do not substitute a newer Pfam release: decoys are drawn from this file and silently change the benchmark results.
 2. The actual sequence alignment software. Transmark is designed to run all sequence alignment tools from local copies of source code or binaries.  It accepts the full local paths to all executables so you do not need to have installed them via root access. The tools tested by transmark can be cloned or downloaded from the following locations. Be sure to follow directions to compile and/or make.
     1. BATH    - https://github.com/TravisWheelerLab/BATH
     2. BLAST   - https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/
@@ -46,7 +49,7 @@ The \<frameshift rate\> is your desired rate of simulated frameshifts in the emb
 
 For example:
 ```
-./transmark-create --pre -N 10 -L 100000000 -R 10 -E 10 --maxtrain 30 --maxtest 20 --maxfams 1500 -D ~/PFAM/Pfam-A.seed tanskmark00 seed-files/train-test.DNA.tfile seed-files/train-test.AA.tfile  ~/ncbi-blast-2.14.1+/bin/ ~/hmmer/easel/  0.0
+./transmark-create --pre -N 10 -L 100000000 -R 10 -E 10 --maxtrain 30 --maxtest 20 --maxfams 1500 -D ~/Pfam38.1/Pfam-A.seed tanskmark00 seed-files/train-test.DNA.tfile seed-files/train-test.AA.tfile  ~/ncbi-blast-2.14.1+/bin/ ~/hmmer/easel/  0.0
 ```
 To create an overextension benchmark like the ones used in the BATH manuscript (which embeds only the middle 50% of each test sequence) simply add the --over flag. 
 
@@ -107,6 +110,9 @@ cd ..
 2. Set paths/config in config.sh (or via environment variables):
    DUMMER_DIR (seq-position-probs/bin containing dummest), PREP_HMMER_DIR,
    PREP_BATH1_DIR, PREP_BATH2_DIR, BATHSEARCH_DIR, BADREAD_DIR, LAST_DIR.
+   CREATE_PFAM_SEED must point at the Pfam 38.1 Pfam-A.seed (see above);
+   step1 reuses existing DBs unless --force, so this matters only when
+   rebuilding, and a different release changes the decoys and results.
    seqkit and mmseqs must be on PATH. Frameshift simulation additionally
    needs the upstream Badread clone plus the badread/edlib packages.
 3. Run the full pipeline. By default it benchmarks the frameshifted reads
