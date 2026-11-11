@@ -11,9 +11,19 @@ permissions:
 
 jobs:
   build:
-    name: Build and test image
+    name: Build and test (${{ matrix.arch }})
     if: github.event_name == 'push' || startsWith(github.event.release.tag_name, 'v')
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            cuda: '1'
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            cuda: '0'
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out source and submodules
         uses: actions/checkout@v6
@@ -30,29 +40,35 @@ jobs:
           sudo apt-get install --yes apptainer
 
       - name: Install CUDA Toolkit
+        if: matrix.cuda == '1'
         uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
         with:
           cuda: '13.2.0'
 
       - name: Verify CUDA compiler
+        if: matrix.cuda == '1'
         run: nvcc --version
 
       - name: Build image
         env:
-          # Disables GPU passthrough to Apptainer; CUDA compilation and GPU-enabled binaries remain enabled.
+          SIF: dummest-${{ matrix.arch }}.sif
+          CUDA: ${{ matrix.cuda }}
+          # Disables GPU passthrough to Apptainer; amd64 CUDA compilation remains enabled.
           NV: '0'
           REBUILD_MMSEQS: '1'
           REBUILD_DUMMEST: '1'
         run: ./build_apptainer.sh
 
       - name: Run image tests
-        run: apptainer test dummest.sif
+        env:
+          SIF: dummest-${{ matrix.arch }}.sif
+        run: apptainer test "$SIF"
 
       - name: Upload image artifact
         uses: actions/upload-artifact@v7
         with:
-          name: dummest-apptainer
-          path: dummest.sif
+          name: dummest-${{ matrix.arch }}
+          path: dummest-${{ matrix.arch }}.sif
           if-no-files-found: error
 
   publish-release-asset:
@@ -63,14 +79,16 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download image artifact
+      - name: Download image artifacts
         uses: actions/download-artifact@v7
         with:
-          name: dummest-apptainer
+          pattern: dummest-*
+          path: release-assets
+          merge-multiple: true
 
       - name: Upload image to release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" dummest.sif --clobber
+        run: gh release upload "$RELEASE_TAG" release-assets/dummest-amd64.sif release-assets/dummest-arm64.sif --clobber
