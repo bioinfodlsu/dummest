@@ -148,8 +148,13 @@ mkdir -p "$STAGE_DIR/payload"
 install -m755 "$DUMMEST_CACHE/dummest_core" "$DUMMEST_CACHE/dummestl_core" "$DUMMEST_CACHE/dummest-build" "$STAGE_DIR/"
 install -m755 bin/dummest "$STAGE_DIR/"
 install -m755 "$MMSEQS_BIN_PATH" "$STAGE_DIR/mmseqs"
-git ls-files -z --cached --others --exclude-per-directory=.gitignore \
-    | while IFS= read -r -d '' f; do [ -f "$f" ] && printf '%s\0' "$f"; done \
+git ls-files -z --cached \
+    | while IFS= read -r -d '' f; do
+        case "$f" in
+            .github/*|benchmarks/*) continue ;;
+        esac
+        [ -f "$f" ] && printf '%s\0' "$f"
+    done \
     | tar --null -T - -cf - | tar -C "$STAGE_DIR/payload" -xf -
 
 # --- build the image ---

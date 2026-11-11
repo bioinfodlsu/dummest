@@ -1,0 +1,76 @@
+name: Build Apptainer image
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test image
+    if: github.event_name == 'push' || startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source and submodules
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes software-properties-common ccache cmake ninja-build cargo
+          sudo add-apt-repository --yes ppa:apptainer/ppa
+          sudo apt-get update
+          sudo apt-get install --yes apptainer
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
+        with:
+          cuda: '13.2.0'
+
+      - name: Verify CUDA compiler
+        run: nvcc --version
+
+      - name: Build image
+        env:
+          # Disables GPU passthrough to Apptainer; CUDA compilation and GPU-enabled binaries remain enabled.
+          NV: '0'
+          REBUILD_MMSEQS: '1'
+          REBUILD_DUMMEST: '1'
+        run: ./build_apptainer.sh
+
+      - name: Run image tests
+        run: apptainer test dummest.sif
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: dummest-apptainer
+          path: dummest.sif
+          if-no-files-found: error
+
+  publish-release-asset:
+    name: Attach image to GitHub Release
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download image artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: dummest-apptainer
+
+      - name: Upload image to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" dummest.sif --clobber

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 import sys
 import os
-import shutil
 import subprocess
 import tempfile
 import argparse
-import pybedtools
+import threading
+import traceback
+
 
 def _cache_dir():
     # Shared with dummest: $DUMMEST_CACHE_DIR, then
@@ -66,12 +67,207 @@ def _resolve_gpu(mode):
     return _gpu_available()
 
 
-def _run_dummer(cmd):
+def _engine_failed(returncode):
+    print(f"Error: dummest encountered an issue (Exit status: {returncode})")
+    sys.exit(1)
+
+
+# awk stage: unpack the fake chrom "chrom|profile|strand" produced upstream
+# into a real-chrom BED record (chrom, start, end, query, ".", strand).
+_AWK_UNPACK = r'''BEGIN { FS = "\t"; OFS = "\t" }
+{
+    n = split($1, a, "|")
+    if (n < 3) {
+        print "# WARNING: malformed interval name: " $1 > "/dev/stderr"
+        exit 1
+    }
+    chrom = a[1]
+    for (i = 2; i <= n - 2; i++)
+        chrom = chrom "|" a[i]
+    print chrom, $2, $3, a[n-1], ".", a[n]
+}'''
+
+
+def _stream_bed_from_convertalis(src, dst, dna_lens, hmm_lens, errors):
+    # Stream BLAST-tab rows from `mmseqs convertalis --output-stdout` and
+    # write BED records (fake chrom chrom|profile|strand), mirroring the
+    # historic in-memory parser.
+    malformed = 0
     try:
-        subprocess.run(cmd, env=os.environ.copy(), check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"Error: dummest encountered an issue (Exit status: {e.returncode})")
-        sys.exit(1)
+        for lineno, line in enumerate(src, 1):
+            if line.startswith(b"#"):
+                continue
+
+            fields = line.split()
+            if len(fields) < 12:
+                continue
+
+            query_acc = fields[0]
+            target_full = fields[1]
+            try:
+                int(fields[6])
+                int(fields[7])
+                t_start = int(fields[8])
+                t_end = int(fields[9])
+            except ValueError:
+                malformed += 1
+                if malformed <= 5:
+                    print(f"# WARNING: skipping convertalis line {lineno} "
+                          f"with non-integer coords: "
+                          f"{line.decode('utf-8', 'replace').strip()!r}",
+                          file=sys.stderr)
+                continue
+            p_pos = max(1, (t_start + t_end) // 2)
+            bitscore = fields[11]
+
+            target_parts = target_full.rsplit(b'_', 1)
+            target_base = target_parts[0] if len(target_parts) == 2 else b""
+            frame_str = target_parts[-1]
+            try:
+                frame_val = int(frame_str.split(b'=')[1])
+            except (IndexError, ValueError):
+                # Run-A hardening: log-and-skip a malformed convertalis
+                # target instead of crashing the hour-long run.
+                malformed += 1
+                if malformed <= 5:
+                    print(f"# WARNING: skipping convertalis line {lineno} "
+                          f"with malformed target (expected *_frame=±N): "
+                          f"{target_full.decode('utf-8', 'replace')!r} :: "
+                          f"{line.decode('utf-8', 'replace').strip()!r}",
+                          file=sys.stderr)
+                continue
+            strand, frame = (b'+', frame_val) if frame_val > 0 else (b'-', -frame_val)
+
+            L = dna_lens.get(target_base.decode("utf-8", "replace"), 0)
+            if L == 0:
+                continue
+            pad = 3 * hmm_lens.get(query_acc.decode("utf-8", "replace"), 0)
+
+            base_pos = (frame - 1) + 3 * (p_pos - 1)
+
+            if strand == b'+':
+                start = max(0, base_pos - pad)
+                end = min(L, base_pos + 1 + pad)
+                fake_chrom = target_base + b"|" + query_acc + b"|+"
+            else:
+                start = max(0, L - base_pos - 1 - pad)
+                end = min(L, L - base_pos + pad)
+                fake_chrom = target_base + b"|" + query_acc + b"|-"
+
+            dst.write(b"%s\t%d\t%d\t%s\t%s\t%s\n"
+                      % (fake_chrom, start, end, query_acc, bitscore, strand))
+
+        if malformed:
+            print(f"# WARNING: skipped {malformed} malformed convertalis "
+                  f"row(s) (see first 5 above)", file=sys.stderr)
+    except BrokenPipeError:
+        pass
+    except Exception:
+        errors.append(traceback.format_exc())
+    finally:
+        try:
+            dst.close()
+        except Exception:
+            pass
+        try:
+            src.close()
+        except Exception:
+            pass
+
+
+def _rewrite_fasta(src, engine_stdin, out_handle, dna_lens, errors):
+    # bedtools getfasta -name+ headers: ">QUERY::chrom:start-end(strand)".
+    # Rewrite them to the pipeline FASTA header the engine expects:
+    #   >chrom/start-end length=L profile=QUERY strand_label
+    try:
+        for line in src:
+            if line.startswith(b">"):
+                header_data = line[1:].strip()
+                if b"::" in header_data:
+                    query, coord_part = header_data.split(b"::")
+                else:
+                    query, coord_part = b"UNKNOWN", header_data
+                chrom_b, rest = coord_part.split(b":")
+                pos, strand_part = rest.split(b"(")
+                start_str, end_str = pos.split(b"-")
+                strand_sign = strand_part[:1]
+
+                start, end = int(start_str), int(end_str)
+                chrom = chrom_b.decode("utf-8", "replace")
+                strand_label = "plus_strand" if strand_sign == b"+" else "minus_strand_revcomp"
+
+                new_line = (b">" + chrom_b + b"/" + str(start + 1).encode()
+                            + b"-" + str(end).encode()
+                            + b" length=" + str(dna_lens.get(chrom, 0)).encode()
+                            + b" profile=" + query + b" "
+                            + strand_label.encode() + b"\n")
+            else:
+                new_line = line
+
+            if out_handle is not None:
+                out_handle.write(new_line)
+            if engine_stdin is not None:
+                engine_stdin.write(new_line)
+    except BrokenPipeError:
+        pass
+    except Exception:
+        errors.append(traceback.format_exc())
+    finally:
+        for h in (engine_stdin, out_handle):
+            if h is not None:
+                try:
+                    h.close()
+                except Exception:
+                    pass
+        try:
+            src.close()
+        except Exception:
+            pass
+
+
+def _write_max_fasta(engine_stdin, out_handle, dna_seqs, hmm_lens, trans):
+    # Stream the --max cross product (contig x profile x 2 strands) without
+    # materializing it on disk; optionally tee to --output-fa.
+    buf = []
+    buflen = 0
+
+    def flush():
+        nonlocal buflen
+        if not buf:
+            return
+        data = b"".join(buf)
+        del buf[:]
+        buflen = 0
+        if out_handle is not None:
+            out_handle.write(data)
+        if engine_stdin is not None:
+            engine_stdin.write(data)
+
+    try:
+        for chrom, seq in dna_seqs.items():
+            L = len(seq)
+            rc_seq = seq.translate(trans)[::-1]
+            seq_nl = (seq + "\n").encode("utf-8")
+            rc_seq_nl = (rc_seq + "\n").encode("utf-8")
+            for prof in sorted(hmm_lens):
+                head = f">{chrom}/1-{L} length={L} profile={prof} "
+                plus = (head + "plus_strand\n").encode("utf-8")
+                minus = (head + "minus_strand_revcomp\n").encode("utf-8")
+                buf.extend((plus, seq_nl, minus, rc_seq_nl))
+                buflen += len(plus) + len(seq_nl) + len(minus) + len(rc_seq_nl)
+                if buflen >= 1 << 20:
+                    flush()
+        flush()
+    except BrokenPipeError:
+        pass
+    finally:
+        if engine_stdin is not None:
+            try:
+                engine_stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+        if out_handle is not None:
+            out_handle.close()
 
 
 def main():
@@ -230,6 +426,8 @@ def main():
                 if curr_name: hmm_lens[curr_name] = length
                 curr_acc, curr_name = None, None
 
+    # Full sequences are only needed by --max (streamed to the engine);
+    # the default path only needs per-contig lengths for window mapping.
     dna_lens = {}
     dna_seqs = {}
     with open(fa_file, 'r') as f:
@@ -240,48 +438,52 @@ def main():
             if line.startswith(">"):
                 if curr_id:
                     dna_lens[curr_id] = len("".join(curr_seq))
-                    dna_seqs[curr_id] = "".join(curr_seq)
+                    if args.max:
+                        dna_seqs[curr_id] = "".join(curr_seq)
                 curr_id = line[1:].split()[0]
                 curr_seq = []
             elif curr_id:
                 curr_seq.append(line)
         if curr_id:
             dna_lens[curr_id] = len("".join(curr_seq))
-            dna_seqs[curr_id] = "".join(curr_seq)
+            if args.max:
+                dna_seqs[curr_id] = "".join(curr_seq)
 
     # total search space: all genome lengths, doubled for both strands
     tot_seq_len = sum(dna_lens.values()) * 2
 
     # ---------------------------------------------------------
-    # --max mode: skip mmseqs2, run dummer directly on all profiles x contigs
+    # --max mode: skip mmseqs2, stream all profiles x contigs to dummer
     # ---------------------------------------------------------
     if args.max:
-        merged_fa_path = os.path.join(tmp_parent, f"dummest_max.{os.getpid()}.fa")
-        trans = str.maketrans("ACGTacgt", "TGCAtgca")
+        if args.skip_dummer and not args.output_fa:
+            print("# --skip-dummest set without --output-fa: nothing to produce")
+            return
 
-        with open(merged_fa_path, "w") as fout:
-            for chrom, seq in dna_seqs.items():
-                L = len(seq)
-                rc_seq = seq.translate(trans)[::-1]
-                for prof in sorted(hmm_lens):
-                    fout.write(f">{chrom}/1-{L} length={L} profile={prof} plus_strand\n")
-                    fout.write(f"{seq}\n")
-                    fout.write(f">{chrom}/1-{L} length={L} profile={prof} minus_strand_revcomp\n")
-                    fout.write(f"{rc_seq}\n")
+        engine_cmd = [dummer_exec, hmm_file, '-', '-T', str(cpus), '--max',
+                      '-e', str(args.evalue), '-N', str(tot_seq_len)] + dummer_extra_args
+        print(f"# Max mode: streaming {len(dna_seqs)} contig(s) x "
+              f"{len(hmm_lens)} profile entries x 2 strands to dummest")
 
-        print(f"# Max-mode FASTA written to: {merged_fa_path}")
-
+        engine_proc = None
+        out_handle = open(args.output_fa, "wb") if args.output_fa else None
         if not args.skip_dummer:
-            _run_dummer(
-                [dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '--max', '-e', str(args.evalue), '-N', str(tot_seq_len)]
-                + dummer_extra_args
-            )
-
+            engine_proc = subprocess.Popen(engine_cmd, stdin=subprocess.PIPE,
+                                           bufsize=1024 * 1024)
+        trans = str.maketrans("ACGTacgt", "TGCAtgca")
+        try:
+            _write_max_fasta(engine_proc.stdin if engine_proc else None,
+                             out_handle, dna_seqs, hmm_lens, trans)
+        except Exception:
+            if engine_proc is not None:
+                engine_proc.terminate()
+            raise
+        if engine_proc is not None:
+            rc = engine_proc.wait()
+            if rc != 0:
+                _engine_failed(rc)
         if args.output_fa:
-            shutil.copy2(merged_fa_path, args.output_fa)
             print(f"# Debug FASTA saved to: {args.output_fa}")
-        else:
-            os.remove(merged_fa_path)
 
         return
 
@@ -299,34 +501,35 @@ def main():
         print(f"# MMseqs2 prefilter: {'GPU' if use_gpu else 'CPU-only'} (--gpu {gpu_flag})")
 
         ali_file = os.path.join(db_dir, "result.ali")
-        tmp_file = os.path.join(db_dir, "tmp")
 
         if args.target_db_pad:
             target_db_pad = args.target_db_pad
             print(f"# Using existing target_db_pad: {target_db_pad}")
         else:
-            prot_fa_path = os.path.join(tmpdir, "translated_6frame.pfa")
             # Parity with step3-dummer-precompute.sh:
             #   seqkit seq -m 3 <fa> | seqkit translate -f 6 -F
             # Short (<3nt) DNAs are auto-removed by the -m 3 pre-filter so
             # per-run and prebuilt DBs stay identical; empty protein frames
             # from >=3nt DNAs are intentionally retained.
+            # Stream the 6-frame translation straight into createdb's stdin.
             print("# 6-frame translate with -m 3 pre-filter (parity with step3-dummer-precompute.sh)")
+            target_db_pad = os.path.join(db_dir, "targetDB_pad")
             p1 = subprocess.Popen(["seqkit", "seq", "-m", "3", fa_file],
                                   stdout=subprocess.PIPE)
             p2 = subprocess.Popen(["seqkit", "translate", "-f", "6", "-F",
-                                   "--threads", str(cpus),
-                                   "-o", prot_fa_path],
-                                  stdin=p1.stdout)
+                                   "--threads", str(cpus)],
+                                  stdin=p1.stdout, stdout=subprocess.PIPE)
             p1.stdout.close()
+            p3 = subprocess.Popen([mmseqs_exec, "createdb", "stdin", target_db_pad,
+                                   "--gpu", gpu_flag, "--threads", cpus],
+                                  stdin=p2.stdout, stdout=subprocess.DEVNULL)
+            p2.stdout.close()
+            ret3 = p3.wait()
             ret2 = p2.wait()
             ret1 = p1.wait()
-            if ret1 != 0 or ret2 != 0:
-                raise subprocess.CalledProcessError(ret2 if ret2 != 0 else ret1,
-                                                    "seqkit seq -m 3 | seqkit translate -f 6 -F")
-
-            target_db_pad = os.path.join(db_dir, "targetDB_pad")
-            subprocess.run([mmseqs_exec, "createdb", prot_fa_path, target_db_pad, "--gpu", gpu_flag, "--threads", cpus], check=True, stdout=subprocess.DEVNULL)
+            if ret1 != 0 or ret2 != 0 or ret3 != 0:
+                raise subprocess.CalledProcessError(ret3 or ret2 or ret1,
+                                                    "seqkit seq -m 3 | seqkit translate -f 6 -F | mmseqs createdb stdin")
 
         if args.query_db:
             query_db = args.query_db
@@ -345,7 +548,7 @@ def main():
             mmseqs_exec, "search", query_db, target_db_pad, ali_file, tmpdir,
             "--gpu", gpu_flag,
             "--threads", cpus,
-            "-e", str(len(dna_seqs) * 6 * args.gapped_pvalue),
+            "-e", str(len(dna_lens) * 6 * args.gapped_pvalue),
             "--max-seqs", str(args.prefilter_max_seqs),
             "--prefilter-mode", str(args.prefilter_mode),
             "--ungapped-pvalue", str(args.ungapped_pvalue),
@@ -360,164 +563,108 @@ def main():
               + (" (recalibrating)" if args.ungapped_recalibrate else ""))
 
         subprocess.run(mmseqs_cmd, check=True)
-        subprocess.run([mmseqs_exec, "convertalis", query_db, target_db_pad, ali_file, tmp_file, "--threads", cpus], check=True, stdout=subprocess.DEVNULL)
 
         # ---------------------------------------------------------
-        # 4. Map Amino Acid Hits -> Genomic DNA Windows
+        # 4-6. Stream convertalis -> BED -> sort/merge -> getfasta ->
+        #      rewrite -> dummest. Nothing in between touches the disk.
         # ---------------------------------------------------------
-        #
-        # Coordinate conventions:
-        #
-        #   mmseqs convertalis output (BLAST-tab fields):
-        #     fields[6]=qstart, fields[7]=qend  — 1-indexed inclusive profile positions
-        #     fields[8]=tstart, fields[9]=tend  — 1-indexed inclusive target protein positions
-        #
-        #   Six-frame translation:
-        #     Forward frame N (N=1,2,3): protein[1] ↔ genome nucleotide [N-1] (0-indexed)
-        #       protein position p ↔ genome nucleotide (N-1) + 3*(p-1)   (1st nt of codon)
-        #       protein position p ↔ genome nucleotide (N-1) + 3*(p-1)+2 (3rd nt of codon)
-        #     Reverse frame N (N=1,2,3): translation runs over reverse-complement of genome.
-        #       RC position i (0-indexed) ↔ original genome position L-1-i
-        #       protein position p in frame N ↔ 1st nt of codon at original position:
-        #         L - N - 3*p + 3   (0-indexed, inclusive)
-        #
-        def parse_mmseqs_to_intervals(filepath):
-            malformed = 0
-            for lineno, line in enumerate(open(filepath), 1):
-                if line.startswith("#"):
-                    continue
-
-                fields = line.split()
-                if len(fields) < 12:
-                    continue
-
-                query_acc = fields[0]
-                target_full = fields[1]
-                try:
-                    q_start = int(fields[6])
-                    q_end   = int(fields[7])
-                    t_start = int(fields[8])
-                    t_end = int(fields[9])
-                except ValueError:
-                    malformed += 1
-                    if malformed <= 5:
-                        print(f"# WARNING: skipping convertalis line {lineno} "
-                              f"with non-integer coords: {line.strip()!r}",
-                              file=sys.stderr)
-                    continue
-                p_pos = max(1, (t_start + t_end) // 2)
-                bitscore = fields[11]
-
-                *target_parts, frame_str = target_full.rsplit('_', 1)
-                target_base = '_'.join(target_parts)
-                try:
-                    frame_val = int(frame_str.split('=')[1])
-                except (IndexError, ValueError):
-                    # Run-A hardening: log-and-skip a malformed convertalis
-                    # target instead of crashing the hour-long run. The
-                    # offender row is preserved via the failure copy below.
-                    malformed += 1
-                    if malformed <= 5:
-                        print(f"# WARNING: skipping convertalis line {lineno} "
-                              f"with malformed target (expected *_frame=±N): "
-                              f"{target_full!r} :: {line.strip()!r}",
-                              file=sys.stderr)
-                    continue
-                strand, frame = ('F', frame_val) if frame_val > 0 else ('R', abs(frame_val))
-
-                L = dna_lens.get(target_base, 0)
-                if L == 0:
-                    continue
-                pad = 3 * hmm_lens.get(query_acc, 0)
-
-                base_pos = (frame - 1) + 3 * (p_pos - 1)
-
-                if strand == 'F':
-                    start = max(0, base_pos - pad)
-                    end   = min(L, base_pos + 1 + pad)
-                    fake_chrom = f"{target_base}|{query_acc}|+"
-                    yield pybedtools.Interval(fake_chrom, start, end, query_acc, bitscore, '+')
-                else:
-                    start = max(0, L - base_pos - 1 - pad)
-                    end = min(L, L - base_pos + pad)
-                    fake_chrom = f"{target_base}|{query_acc}|-"
-                    yield pybedtools.Interval(fake_chrom, start, end, query_acc, bitscore, '-')
-
-            if malformed:
-                print(f"# WARNING: skipped {malformed} malformed convertalis "
-                      f"row(s) (see first 5 above)", file=sys.stderr)
-
-        def unpack_intervals(feature):
-            real_chrom, query_acc, strand = feature.chrom.split('|')
-            return pybedtools.Interval(real_chrom, feature.start, feature.end, query_acc, ".", strand)
-
-        try:
-            merged_bed = pybedtools.BedTool(parse_mmseqs_to_intervals(tmp_file)) \
-                .sort() \
-                .merge() \
-                .each(unpack_intervals)
-        except Exception:
-            # Preserve the offender for Run-A forensics: tmpdir is deleted
-            # on exit, so copy the convertalis output to CWD before re-raise.
-            rescue = os.path.join(os.getcwd(),
-                                  f"convertalis.{os.path.basename(fa_file)}.tmp.failed")
-            try:
-                shutil.copy2(tmp_file, rescue)
-                print(f"# convertalis output preserved at: {rescue}",
-                      file=sys.stderr)
-            except OSError as _e:
-                print(f"# WARNING: could not preserve convertalis output: {_e}",
-                      file=sys.stderr)
-            raise
-
-        # ---------------------------------------------------------
-        # 5. Extract Final Genomic FASTA (Bedtools)
-        # ---------------------------------------------------------
-        merged_bed_path = os.path.join(tmpdir, "merged.bed")
-        merged_bed.saveas(merged_bed_path)
-        
-        raw_fa_path = os.path.join(tmpdir, "raw_ext.fa")
-        merged_fa_path = os.path.join(tmpdir, "debug.fa")
+        if args.skip_dummer and not args.output_fa:
+            print("# --skip-dummest set without --output-fa: nothing to produce")
+            return
 
         # bedtools writes <fi>.fai next to the input FASTA; if fa_file lives on
         # a read-only mount (e.g. the Apptainer image), that fails. Symlink it
-        # into the writable tmpdir so the index is created there instead.
+        # into the writable tmpdir so the index is created there instead; reuse
+        # an existing .fai when the caller already has one.
         bedtools_fa = os.path.join(tmpdir, os.path.basename(fa_file))
         if os.path.lexists(bedtools_fa):
             os.remove(bedtools_fa)
         os.symlink(os.path.abspath(fa_file), bedtools_fa)
+        fai_src = fa_file + ".fai"
+        if os.path.exists(fai_src) and not os.path.lexists(bedtools_fa + ".fai"):
+            os.symlink(os.path.abspath(fai_src), bedtools_fa + ".fai")
 
-        subprocess.run(["bedtools", "getfasta", "-fi", bedtools_fa, "-bed", merged_bed_path, "-s", "-name+", "-fo", raw_fa_path], check=True)
+        engine_cmd = [dummer_exec, hmm_file, '-', '-T', str(cpus),
+                      '-e', str(args.evalue), '-W', str(args.evalue),
+                      '-N', str(tot_seq_len)] + dummer_extra_args
 
-        with open(raw_fa_path, 'r') as fin, open(merged_fa_path, 'w') as fout:
-            for line in fin:
-                if line.startswith(">"):
-                    header_data = line[1:].strip()
-                    query, coord_part = header_data.split("::") if "::" in header_data else ("UNKNOWN", header_data)
-                    chrom, rest = coord_part.split(":")
-                    pos, strand_part = rest.split("(")
-                    start_str, end_str = pos.split("-")
-                    strand_sign = strand_part[0]
-                    
-                    start, end = int(start_str), int(end_str)
-                    strand_label = "plus_strand" if strand_sign == '+' else "minus_strand_revcomp"
+        conv_proc = subprocess.Popen(
+            [mmseqs_exec, "convertalis", query_db, target_db_pad, ali_file,
+             os.path.join(tmpdir, "convertalis.stdout.ignore"),
+             "--output-stdout", "1", "--threads", cpus, "-v", "1"],
+            stdout=subprocess.PIPE)
+        sort_proc = subprocess.Popen(["bedtools", "sort", "-i", "stdin"],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        merge_proc = subprocess.Popen(["bedtools", "merge", "-i", "stdin"],
+                                      stdin=sort_proc.stdout, stdout=subprocess.PIPE)
+        sort_proc.stdout.close()
+        awk_proc = subprocess.Popen(["awk", _AWK_UNPACK],
+                                    stdin=merge_proc.stdout, stdout=subprocess.PIPE)
+        merge_proc.stdout.close()
+        get_proc = subprocess.Popen(["bedtools", "getfasta", "-fi", bedtools_fa,
+                                     "-bed", "stdin", "-s", "-name+"],
+                                    stdin=awk_proc.stdout, stdout=subprocess.PIPE)
+        awk_proc.stdout.close()
 
-                    fout.write(f">{chrom}/{start+1}-{end} length={dna_lens.get(chrom, 0)} profile={query} {strand_label}\n")
-                else:
-                    fout.write(line)
-
-        if args.output_fa:
-            shutil.copy2(merged_fa_path, args.output_fa)
-            print(f"# Debug FASTA saved to: {args.output_fa}")
-
-        # ---------------------------------------------------------
-        # 6. Run Dummer
-        # ---------------------------------------------------------
+        engine_proc = None
+        out_handle = open(args.output_fa, "wb") if args.output_fa else None
         if not args.skip_dummer:
-            _run_dummer(
-                [dummer_exec, hmm_file, merged_fa_path, '-T', str(cpus), '-e', str(args.evalue), '-W', str(args.evalue), '-N', str(tot_seq_len)]
-                + dummer_extra_args
-            )
+            engine_proc = subprocess.Popen(engine_cmd, stdin=subprocess.PIPE,
+                                           bufsize=1024 * 1024)
+
+        procs = [("mmseqs convertalis", conv_proc), ("bedtools sort", sort_proc),
+                 ("bedtools merge", merge_proc), ("awk", awk_proc),
+                 ("bedtools getfasta", get_proc)]
+        if engine_proc is not None:
+            procs.append(("dummest", engine_proc))
+
+        errors = []
+        t_parse = threading.Thread(
+            target=_stream_bed_from_convertalis,
+            args=(conv_proc.stdout, sort_proc.stdin, dna_lens, hmm_lens, errors))
+        t_rewrite = threading.Thread(
+            target=_rewrite_fasta,
+            args=(get_proc.stdout,
+                  engine_proc.stdin if engine_proc is not None else None,
+                  out_handle, dna_lens, errors))
+        t_parse.start()
+        t_rewrite.start()
+
+        try:
+            rc_engine = engine_proc.wait() if engine_proc is not None else 0
+            t_parse.join()
+            t_rewrite.join()
+            if out_handle is not None:
+                out_handle.close()
+                out_handle = None
+
+            if rc_engine != 0:
+                _engine_failed(rc_engine)
+
+            failed = []
+            if errors:
+                for e in errors:
+                    print(e, file=sys.stderr)
+                failed.append("pipeline stages crashed")
+            for name, proc in procs:
+                rc = proc.wait()
+                if rc != 0:
+                    failed.append(f"{name} (exit {rc})")
+
+            if failed:
+                print("Error: pipeline stage failed: " + ", ".join(failed),
+                      file=sys.stderr)
+                sys.exit(1)
+
+            if args.output_fa:
+                print(f"# Debug FASTA saved to: {args.output_fa}")
+        finally:
+            for _, proc in procs:
+                if proc.poll() is None:
+                    proc.terminate()
+            if out_handle is not None and not out_handle.closed:
+                out_handle.close()
+
 
 if __name__ == "__main__":
     main()
