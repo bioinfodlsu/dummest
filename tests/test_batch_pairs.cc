@@ -1,12 +1,8 @@
 // Unit tests for the score layer: batch kernels vs scalar oracles, the
 // row-scaled compute helpers, ExpMatrix SoA access, and VecTraits.
 //
-// Build (uses the Kokkos from this repo; links nothing but Kokkos headers):
-//   KOK=<repo>/kokkos-5.1.1; BLDCFG=<build>/kokkos-5.1.1
-//   g++ -std=c++20 -O2 -march=native -I<repo> -I$KOK/simd/src \
-//       -I$KOK/core/src -I$BLDCFG -I$KOK/tpls/desul/include \
-//       -I$BLDCFG/core/src -I$KOK/tpls/mdspan/include \
-//       tools/test_batch_pairs.cc -o /tmp/test_batch_pairs && /tmp/test_batch_pairs
+// Build: the test_batch_pairs CMake target (see CMakeLists.txt), e.g.
+//   TARGETS=test_batch_pairs ./build.sh
 // Double build: add -DTEST_DOUBLE (exercises the 64-bit bit-trick paths).
 #include <Kokkos_SIMD.hpp>
 // clang-format off

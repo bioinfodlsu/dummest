@@ -44,12 +44,9 @@ if [[ ! -f "$FIXDIR/herpes.hmm" ]]; then
     exit 1
 fi
 if [[ $SKIP_BUILD -eq 0 ]]; then
-    if [[ ! -d "$BUILD_DIR" ]]; then
-        log "configuring $BUILD_DIR"
-        cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
-    fi
     log "building dummest_core + dummestl_core"
-    cmake --build "$BUILD_DIR" --target dummest_core dummestl_core -j "$(nproc)"
+    BUILD_TYPE=Release BUILD_DIR="$BUILD_DIR" JOBS="$NPROC" \
+        TARGETS="dummest_core dummestl_core" ./build.sh
 else
     log "DUMMER_BIN/DUMMERL_BIN preset; skipping host build"
 fi

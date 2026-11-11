@@ -46,37 +46,22 @@ log() { echo "==> $*"; }
 
 build_one() { # $1=dir $2=poison(ON/OFF) $3=label
     local dir="$1" poison="$2" label="$3"
-    if [[ ! -d "$dir" ]]; then
-        log "configuring $dir ($label)"
-        cmake -S . -B "$dir" -DCMAKE_BUILD_TYPE=Debug -DDUMMEST_POISON="$poison" \
-            -DDUMMEST_SKIP_BIN_COPY=ON >"$dir.configure.log" 2>&1
-    else
-        log "reconfiguring $dir ($label)"
-        cmake -S . -B "$dir" -DCMAKE_BUILD_TYPE=Debug -DDUMMEST_POISON="$poison" \
-            -DDUMMEST_SKIP_BIN_COPY=ON >"$dir.configure.log" 2>&1
-    fi
-    log "building $label"
-    cmake --build "$dir" --target dummest_core dummestl_core -j "$NPROC" >"$dir.build.log" 2>&1
+    log "building $dir ($label)"
+    BUILD_TYPE=Debug BUILD_DIR="$dir" JOBS="$NPROC" \
+        TARGETS="dummest_core dummestl_core test_batch_pairs" \
+        ./build.sh -DDUMMEST_POISON="$poison" -DDUMMEST_SKIP_BIN_COPY=ON \
+        >"$dir.build.log" 2>&1
 }
 
 build_one "$NORM_DIR" OFF "normal"
 build_one "$BUILD_DIR" ON "poison"
 
-# Unit tests: normal + poison (poison sentinel shape checks in test_batch_pairs).
-run_unit() { # $1=dir $2=label $3=extra-cxxflags
+# Unit tests: normal + poison (poison sentinel shape checks in test_batch_pairs),
+# built as the test_batch_pairs CMake target by build.sh above.
+run_unit() { # $1=dir $2=label
     local dir="$1" label="$2"
     log "unit tests ($label)"
-    local kok="$PWD/kokkos-5.1.1" bldkok="$PWD/$dir/kokkos-5.1.1"
-    local defs=""
-    if [[ "$label" == poison* ]]; then defs="-DDUMMEST_POISON"; fi
-    # shellcheck disable=SC2086
-    g++ -std=c++20 -O1 -g $defs -march=native -I"$PWD" \
-        -I"$kok/simd/src" -I"$kok/core/src" -I"$bldkok" \
-        -I"$kok/tpls/desul/include" -I"$bldkok/core/src" \
-        -I"$kok/tpls/mdspan/include" \
-        tests/test_batch_pairs.cc -o "$dir/test_batch_pairs_$label" \
-        >"$dir.unit_build.log" 2>&1
-    "$dir/test_batch_pairs_$label" >"$dir.unit.log" 2>&1 || { FAIL=1; tail -20 "$dir.unit.log"; }
+    "$dir/test_batch_pairs" >"$dir.unit.log" 2>&1 || { FAIL=1; tail -20 "$dir.unit.log"; }
     tail -2 "$dir.unit.log"
 }
 run_unit "$NORM_DIR" normal

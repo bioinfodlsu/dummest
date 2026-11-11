@@ -10,11 +10,13 @@ From: ubuntu:24.04
     DUMMEST Apptainer container.
 
     Binaries in PATH: dummest (pipeline), dummest_core, dummestl_core,
-    dummest-build, mmseqs (custom GPU fork), seqkit, bedtools.
+    dummest-build, mmseqs (custom MMseqs2 fork), seqkit, bedtools.
     Legacy symlink: pipeline.py -> dummest.
 
-    GPU runs (NVIDIA only) need the host driver injected with --nv:
+    GPU runs (NVIDIA) need the host driver injected with --nv:
       apptainer exec --nv dummest.sif dummest profile.hmm profile.msa genome.fa 8
+    Images built without a CUDA toolkit run GPU-free; --gpu auto selects CPU
+    when no NVIDIA GPU is visible.
 
     Inside the container the pipeline uses the dummest cache directory for
     temporary scratch space. Override it, e.g. to a large disk directory:

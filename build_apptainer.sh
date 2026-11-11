@@ -3,21 +3,26 @@
 #
 # Both binaries are built on the host and copied into a slim runtime image (no
 # compiler, no CUDA toolkit):
-#   - DUMMEST, portable AVX2 (-DDUMMEST_PORTABLE=ON)
-#   - the custom GPU MMseqs2 fork (statically links libcudart; runtime needs
-#     only libcuda.so.1, injected by `apptainer --nv`)
-# The host distro/arch must match the image base (Ubuntu noble, amd64).
+#   - DUMMEST, portable baseline ISA (-DDUMMEST_PORTABLE=ON: x86-64-v3/AVX2 on
+#     amd64, armv8-a/NEON on aarch64)
+#   - the custom MMseqs2 prefilter fork: CUDA-enabled when the CUDA toolkit is
+#     present at build time (statically links libcudart; runtime needs only
+#     libcuda.so.1, injected by `apptainer --nv`), CPU-only otherwise
+# The host distro/arch must match the image base (Ubuntu noble).
 #
 # The MMseqs2 fork (branch prefilter) is bundled as the MMseqs2/ submodule;
 # initialize it with: git submodule update --init --recursive
 #
 # Required on PATH:
 #   ninja, ccache (sudo apt install ninja-build ccache)
-#   (plus cmake, nvcc, and cargo when a rebuild is actually needed)
+#   (plus cmake and cargo; nvcc too when building with CUDA)
 # Optional:
 #   MMSEQS_SRC=<path>           (default: the bundled MMseqs2/ submodule)
 #   SIF=<output image>          (default: dummest.sif)
-#   CUDA_ARCHS=<semicolon list> (default: 75-real;80-real;86-real;89-real;90-real;120-real)
+#   CUDA=auto|1|0               (default: auto; CUDA when nvcc is found, via
+#                               $CUDACXX/PATH//usr/local/cuda — arch-agnostic)
+#   CUDA_ARCHS=<semicolon list> (default: 75-real;80-real;86-real;89-real;90-real;120-real;
+#                               override for non-x86 GPUs, e.g. Grace-Hopper/Jetson)
 #   REBUILD_MMSEQS=1            force a fresh mmseqs build
 #   REBUILD_DUMMEST=1           force a fresh DUMMEST build
 #   APT_CACHE=1                 reuse the host apt caches (same distro/arch only)
@@ -38,14 +43,6 @@ MMSEQS_SRC="${MMSEQS_SRC:-$PWD/MMseqs2}"
 
 command -v apptainer >/dev/null 2>&1 || {
     echo "apptainer not found in PATH" >&2
-    exit 1
-}
-command -v ninja >/dev/null 2>&1 || {
-    echo "ninja not found in PATH; install with: sudo apt install ninja-build" >&2
-    exit 1
-}
-command -v ccache >/dev/null 2>&1 || {
-    echo "ccache not found in PATH; install with: sudo apt install ccache" >&2
     exit 1
 }
 [[ -f dummest.def ]] || {
@@ -73,37 +70,50 @@ if [[ "${SKIP_DISTRO_CHECK:-0}" != "1" ]]; then
     }
 fi
 
-mkdir -p "$CACHE"
-
-# --- build flags: Ninja + ccache, always. ---
-GEN=(-G Ninja); GEN_NAME=Ninja
-LAUNCH=(-DCMAKE_C_COMPILER_LAUNCHER=ccache
-        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-        -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache)
-echo "==> generator: Ninja (ccache enabled)"
-
+# --- helper ---------------------------------------------------------------
 need() {
     command -v "$1" >/dev/null 2>&1 || { echo "$1 not found ($2)" >&2; exit 1; }
 }
 
+# --- CUDA is orthogonal to the host arch (the toolkit targets aarch64 too, ---
+# --- e.g. Grace-Hopper/Jetson); select it by toolchain availability.      ---
+CUDA="${CUDA:-auto}"
+if [[ "$CUDA" == "auto" ]]; then
+    if [[ -n "${CUDACXX:-}" && -x "${CUDACXX}" ]]; then
+        CUDA=1
+    elif command -v nvcc >/dev/null 2>&1; then
+        CUDA=1
+    elif [[ -x /usr/local/cuda/bin/nvcc ]]; then
+        CUDA=1
+        export CUDACXX=/usr/local/cuda/bin/nvcc
+    else
+        CUDA=0
+    fi
+fi
+[[ "$CUDA" == "0" || "$CUDA" == "1" ]] || {
+    echo "CUDA must be auto, 1, or 0 (got: $CUDA)" >&2
+    exit 1
+}
+if [[ "$CUDA" == "1" ]]; then
+    need "${CUDACXX:-nvcc}" "install the CUDA toolkit"
+fi
+
+mkdir -p "$CACHE"
+
 # --- MMseqs2 fork (host build, cached) ---
 MMSEQS_BIN_PATH="$CACHE/mmseqs"
 if [[ "${REBUILD_MMSEQS:-0}" == "1" || ! -x "$MMSEQS_BIN_PATH" ]]; then
-    echo "==> building MMseqs2 fork (CUDA archs: $CUDA_ARCHS)"
-    need cmake "install the CMake build tool"
+    echo "==> building MMseqs2 fork ($([[ "$CUDA" == "1" ]] && echo "CUDA archs: $CUDA_ARCHS" || echo "CPU-only"))"
     need cargo "the MMseqs2 build requires Rust"
-    if [[ -z "${CUDACXX:-}" && -x /usr/local/cuda/bin/nvcc ]]; then
-        export CUDACXX=/usr/local/cuda/bin/nvcc
+
+    cuda_args=(-DENABLE_CUDA="$CUDA")
+    if [[ "$CUDA" == "1" ]]; then
+        cuda_args+=(-DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHS")
     fi
-    need "${CUDACXX:-nvcc}" "install the CUDA toolkit"
 
     bdir="$(mktemp -d "${TMPDIR:-/tmp}/dummest-mmseqs-build.XXXXXX")"
-    cmake -S "$MMSEQS_SRC" -B "$bdir/build" \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DENABLE_CUDA=1 \
-        -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHS" \
-        "${GEN[@]}" "${LAUNCH[@]}"
-    cmake --build "$bdir/build" --parallel "$JOBS" --target mmseqs
+    SRC="$MMSEQS_SRC" BUILD_DIR="$bdir/build" TARGETS=mmseqs \
+        ./build.sh "${cuda_args[@]}"
 
     built="$bdir/build/src/mmseqs"
     [[ -x "$built" ]] || { echo "mmseqs binary not found after build ($built)" >&2; exit 1; }
@@ -117,22 +127,9 @@ fi
 # --- DUMMEST (host build, portable, cached) ---
 DUMMEST_CACHE="$CACHE/dummest-build"
 if [[ "${REBUILD_DUMMEST:-0}" == "1" || ! -x "$DUMMEST_CACHE/dummestl_core" ]]; then
-    echo "==> building DUMMEST (portable AVX2)"
-    need cmake "install the CMake build tool"
-    if [[ -f "$DUMMEST_CACHE/CMakeCache.txt" ]]; then
-        prev_gen="$(sed -n 's/^CMAKE_GENERATOR:INTERNAL=//p' "$DUMMEST_CACHE/CMakeCache.txt")"
-        if [[ -n "$prev_gen" && "$prev_gen" != "$GEN_NAME" ]]; then
-            echo "==> generator changed ($prev_gen -> $GEN_NAME); reconfiguring $DUMMEST_CACHE"
-            rm -rf "$DUMMEST_CACHE"
-        fi
-    fi
-    cmake -S "$PWD" -B "$DUMMEST_CACHE" \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DDUMMEST_PORTABLE=ON \
-        -DDUMMEST_SKIP_BIN_COPY=ON \
-        "${GEN[@]}" "${LAUNCH[@]}"
-    cmake --build "$DUMMEST_CACHE" --parallel "$JOBS" \
-        --target dummest_core dummestl_core dummest-build
+    echo "==> building DUMMEST (portable)"
+    BUILD_DIR="$DUMMEST_CACHE" TARGETS="dummest_core dummestl_core dummest-build" \
+        ./build.sh -DDUMMEST_PORTABLE=ON -DDUMMEST_SKIP_BIN_COPY=ON
     echo "==> staged DUMMEST binaries in $DUMMEST_CACHE"
 else
     echo "==> reusing cached DUMMEST: $DUMMEST_CACHE (REBUILD_DUMMEST=1 to rebuild)"
