@@ -88,7 +88,8 @@ _AWK_UNPACK = r'''BEGIN { FS = "\t"; OFS = "\t" }
 }'''
 
 
-def _stream_bed_from_convertalis(src, dst, dna_lens, hmm_lens, errors):
+def _stream_bed_from_convertalis(src, dst, dna_lens, hmm_lens, errors,
+                                target_is_contig=False):
     # Stream BLAST-tab rows from `mmseqs convertalis --output-stdout` and
     # write BED records (fake chrom chrom|profile|strand), mirroring the
     # historic in-memory parser.
@@ -117,42 +118,52 @@ def _stream_bed_from_convertalis(src, dst, dna_lens, hmm_lens, errors):
                           f"{line.decode('utf-8', 'replace').strip()!r}",
                           file=sys.stderr)
                 continue
-            p_pos = max(1, (t_start + t_end) // 2)
             bitscore = fields[11]
+            if target_is_contig:
+                target_base = target_full
+                target_name = target_full.decode("utf-8", "replace")
+                strand = b'+' if t_start <= t_end else b'-'
+            else:
+                target_parts = target_full.rsplit(b'_', 1)
+                target_base = target_parts[0] if len(target_parts) == 2 else b""
+                frame_str = target_parts[-1]
+                try:
+                    frame_val = int(frame_str.split(b'=')[1])
+                except (IndexError, ValueError):
+                    # Log and skip malformed frame headers without stopping
+                    # a potentially long MMseqs search.
+                    malformed += 1
+                    if malformed <= 5:
+                        print(f"# WARNING: skipping convertalis line {lineno} "
+                              f"with malformed target (expected *_frame=±N): "
+                              f"{target_full.decode('utf-8', 'replace')!r} :: "
+                              f"{line.decode('utf-8', 'replace').strip()!r}",
+                              file=sys.stderr)
+                    continue
+                strand = b'+' if frame_val > 0 else b'-'
+                target_name = target_base.decode("utf-8", "replace")
 
-            target_parts = target_full.rsplit(b'_', 1)
-            target_base = target_parts[0] if len(target_parts) == 2 else b""
-            frame_str = target_parts[-1]
-            try:
-                frame_val = int(frame_str.split(b'=')[1])
-            except (IndexError, ValueError):
-                # Run-A hardening: log-and-skip a malformed convertalis
-                # target instead of crashing the hour-long run.
-                malformed += 1
-                if malformed <= 5:
-                    print(f"# WARNING: skipping convertalis line {lineno} "
-                          f"with malformed target (expected *_frame=±N): "
-                          f"{target_full.decode('utf-8', 'replace')!r} :: "
-                          f"{line.decode('utf-8', 'replace').strip()!r}",
-                          file=sys.stderr)
-                continue
-            strand, frame = (b'+', frame_val) if frame_val > 0 else (b'-', -frame_val)
-
-            L = dna_lens.get(target_base.decode("utf-8", "replace"), 0)
+            L = dna_lens.get(target_name, 0)
             if L == 0:
                 continue
             pad = 3 * hmm_lens.get(query_acc.decode("utf-8", "replace"), 0)
 
-            base_pos = (frame - 1) + 3 * (p_pos - 1)
-
-            if strand == b'+':
-                start = max(0, base_pos - pad)
-                end = min(L, base_pos + 1 + pad)
-                fake_chrom = target_base + b"|" + query_acc + b"|+"
+            if target_is_contig:
+                center = (t_start + t_end) // 2
+                start = max(0, center - 1 - pad)
+                end = min(L, center + pad)
             else:
-                start = max(0, L - base_pos - 1 - pad)
-                end = min(L, L - base_pos + pad)
-                fake_chrom = target_base + b"|" + query_acc + b"|-"
+                p_pos = max(1, (t_start + t_end) // 2)
+                frame = abs(frame_val)
+                base_pos = (frame - 1) + 3 * (p_pos - 1)
+                if strand == b'+':
+                    start = max(0, base_pos - pad)
+                    end = min(L, base_pos + 1 + pad)
+                else:
+                    start = max(0, L - base_pos - 1 - pad)
+                    end = min(L, L - base_pos + pad)
+
+            fake_chrom = target_base + b"|" + query_acc + b"|" + strand
 
             dst.write(b"%s\t%d\t%d\t%s\t%s\t%s\n"
                       % (fake_chrom, start, end, query_acc, bitscore, strand))
@@ -165,14 +176,11 @@ def _stream_bed_from_convertalis(src, dst, dna_lens, hmm_lens, errors):
     except Exception:
         errors.append(traceback.format_exc())
     finally:
-        try:
-            dst.close()
-        except Exception:
-            pass
-        try:
-            src.close()
-        except Exception:
-            pass
+        for handle in (dst, src):
+            try:
+                handle.close()
+            except Exception:
+                pass
 
 
 def _rewrite_fasta(src, engine_stdin, out_handle, dna_lens, errors):
@@ -276,14 +284,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Examples:\n"
                "  dummest profile.hmm msa.msa genome.fa 8\n"
-               "  dummest profile.hmm msa.msa genome.fa 8 --target-db-pad /path/to/targetDB_pad --query-db /path/to/queryDB\n"
+               "  dummest profile.hmm msa.msa genome.fa 8 --processing-type precomputed --target-db-pad /path/to/targetDB_pad --query-db /path/to/queryDB\n"
     )
     parser.add_argument("hmm_file", help="HMM profile file")
     parser.add_argument("msa_file", help="MSA file (.msa for Stockholm, otherwise used as-is for query DB). Ignored when --query-db is provided.")
     parser.add_argument("fa_file", help="Genome FASTA file")
     parser.add_argument("cpus", help="Number of CPUs")
     parser.add_argument("--target-db-pad", dest="target_db_pad", default=None,
-                        help="Path to an existing padded target DB (skips createdb)")
+                        help="Existing padded target DB (requires --processing-type precomputed)")
+    parser.add_argument("--processing-type", choices=["orf", "precomputed"],
+                        default=None,
+                        help="Prefilter input processing: six-frame translation by default, "
+                             "stop-delimited ORFs (orf), or an existing pre-processed DB (precomputed)")
     parser.add_argument("--query-db", dest="query_db", default=None,
                         help="Path to an existing query profile DB (skips convertmsa + msa2profile)")
     parser.add_argument("--skip-dummest", dest="skip_dummer", action="store_true",
@@ -304,8 +316,9 @@ def main():
                          help="P-value threshold for the gapped (Smith-Waterman) alignment, "
                               "stage 2 of the MMseqs2 search (default: 0.005). Stage 1 is "
                               "the ungapped prefilter, gated by --ungapped-pvalue. "
-                              "Forwarded to 'mmseqs search' as -e <nseq*6*pvalue>, where nseq "
-                              "is the number of genome entries (six reading frames each). "
+                              "Forwarded to 'mmseqs search' as -e <target-count*pvalue>; "
+                              "target-count is six times the genome entry count normally, "
+                              "or the extracted ORF count with --processing-type orf. "
                               "Ignored in --max mode, which skips MMseqs2.")
     parser.add_argument("--ungapped-pvalue", dest="ungapped_pvalue", type=float, default=0.02,
                         help="Max per-pair ungapped p-value for the prefilter stage (default: 0.02). "
@@ -355,6 +368,14 @@ def main():
                              "Default: dummest default (5000).")
 
     args = parser.parse_args()
+
+    processing_type = args.processing_type or "six-frame"
+    if args.target_db_pad and processing_type != "precomputed":
+        parser.error("--target-db-pad requires --processing-type precomputed")
+    if processing_type == "precomputed" and not args.target_db_pad:
+        parser.error("--processing-type precomputed requires --target-db-pad")
+    if processing_type == "orf" and args.max:
+        parser.error("--processing-type orf cannot be combined with --max")
 
     if args.gapped_pvalue is None or not args.gapped_pvalue >= 0:
         parser.error("--gapped-pvalue must be >= 0")
@@ -502,7 +523,40 @@ def main():
 
         ali_file = os.path.join(db_dir, "result.ali")
 
-        if args.target_db_pad:
+        contig_db = None
+        orf_count = None
+        if processing_type == "orf":
+            contig_db = os.path.join(db_dir, "contigDB")
+            orf_db = os.path.join(db_dir, "orfDB")
+            target_db_pad = os.path.join(db_dir, "orfDB_pad")
+            print("# Building stop-delimited ORF target DB (six frames, standard "
+                  "genetic code, minimum one codon)")
+            # Keep createdb CPU-side: the MMseqs fork's GPU-created nucleotide
+            # DB can produce an empty extractorfs result.
+            subprocess.run([mmseqs_exec, "createdb", fa_file, contig_db,
+                            "--dbtype", "2", "--threads", cpus],
+                           check=True, stdout=subprocess.DEVNULL)
+            subprocess.run([mmseqs_exec, "extractorfs", contig_db, orf_db,
+                            "--translate", "1", "--min-length", "1",
+                            "--orf-start-mode", "1",
+                            "--contig-start-mode", "2", "--contig-end-mode", "2",
+                            "--forward-frames", "1,2,3",
+                            "--reverse-frames", "1,2,3",
+                            "--translation-table", "1",
+                            "--threads", cpus],
+                           check=True, stdout=subprocess.DEVNULL)
+            try:
+                with open(orf_db + ".index", encoding="utf-8") as index_file:
+                    orf_count = sum(1 for line in index_file if line.strip())
+            except OSError:
+                parser.error(f"ORF database index not found: {orf_db}.index")
+            if orf_count == 0:
+                parser.error("--processing-type orf produced no ORFs from the input FASTA")
+            subprocess.run([mmseqs_exec, "makepaddedseqdb", orf_db,
+                            target_db_pad, "--threads", cpus],
+                           check=True, stdout=subprocess.DEVNULL)
+            print(f"# ORF-split target: {orf_count} ORFs")
+        elif processing_type == "precomputed":
             target_db_pad = args.target_db_pad
             print(f"# Using existing target_db_pad: {target_db_pad}")
         else:
@@ -544,11 +598,12 @@ def main():
         # prefilter stage is ungappedprefilter, where --ungapped-pvalue
         # filters hits before SW.
         # Final significance is the SW E-value (-e); dummer re-scores windows.
+        target_count = orf_count if processing_type == "orf" else len(dna_lens) * 6
         mmseqs_cmd = [
             mmseqs_exec, "search", query_db, target_db_pad, ali_file, tmpdir,
             "--gpu", gpu_flag,
             "--threads", cpus,
-            "-e", str(len(dna_lens) * 6 * args.gapped_pvalue),
+            "-e", str(target_count * args.gapped_pvalue),
             "--max-seqs", str(args.prefilter_max_seqs),
             "--prefilter-mode", str(args.prefilter_mode),
             "--ungapped-pvalue", str(args.ungapped_pvalue),
@@ -588,11 +643,25 @@ def main():
                       '-e', str(args.evalue), '-W', str(args.evalue),
                       '-N', str(tot_seq_len)] + dummer_extra_args
 
+        convert_target = target_db_pad
+        convert_alignment = ali_file
+        if processing_type == "orf":
+            offset_alignment = os.path.join(db_dir, "offset.ali")
+            subprocess.run([mmseqs_exec, "offsetalignment",
+                            query_db, query_db, contig_db, target_db_pad,
+                            ali_file, offset_alignment,
+                            "--search-type", "2", "--merge-query", "1",
+                            "--chain-alignments", "0", "--threads", cpus],
+                           check=True, stdout=subprocess.DEVNULL)
+            convert_target = contig_db
+            convert_alignment = offset_alignment
+
         conv_proc = subprocess.Popen(
-            [mmseqs_exec, "convertalis", query_db, target_db_pad, ali_file,
-             os.path.join(tmpdir, "convertalis.stdout.ignore"),
+            [mmseqs_exec, "convertalis", query_db, convert_target,
+             convert_alignment, os.path.join(tmpdir, "convertalis.stdout.ignore"),
              "--output-stdout", "1", "--threads", cpus, "-v", "1"],
             stdout=subprocess.PIPE)
+        hit_source = conv_proc.stdout
         sort_proc = subprocess.Popen(["bedtools", "sort", "-i", "stdin"],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         merge_proc = subprocess.Popen(["bedtools", "merge", "-i", "stdin"],
@@ -621,7 +690,8 @@ def main():
         errors = []
         t_parse = threading.Thread(
             target=_stream_bed_from_convertalis,
-            args=(conv_proc.stdout, sort_proc.stdin, dna_lens, hmm_lens, errors))
+            args=(hit_source, sort_proc.stdin, dna_lens, hmm_lens, errors,
+                  processing_type == "orf"))
         t_rewrite = threading.Thread(
             target=_rewrite_fasta,
             args=(get_proc.stdout,
